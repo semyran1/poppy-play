@@ -1,14 +1,16 @@
 // Сцена боя: волны главы, режиссёр спавна, счётчик капель, урон, комбо, подбор, прокачка, босс, сундук.
-import { BASE_STATS, WEAPONS, PASSIVES, ENEMIES, CHAPTERS, META_SHOP, xpToNext } from './data.js';
+import { BASE_STATS, WEAPONS, PASSIVES, ENEMIES, CHAPTERS, META_SHOP, xpToNext, assistFor } from './data.js';
 import { createPlayer, updatePlayer, drawPlayer, playerBox, GROUND, ARENA, muzzle } from './player.js';
+import { view, onViewChange } from '../engine/core.js';
+import { withFrame, fillFull } from '../engine/frame.js';
 import { makeEnemy, updateEnemy, drawEnemy } from './enemies.js';
 import { updateWeapons, updateShots, drawShots, drawWeaponFx, weaponParams, muzzleColor } from './weapons.js';
 import { makeSpasm, updateBoss, drawBoss, drawBossBar } from './boss.js';
 import { BLOAT_SIZES, BLOAT_TOTAL, updateFoes, drawFoes } from './chapter2.js';
 import { makeQueen, updateOwnFoes, drawOwnFoes, drawGothicAmbient } from './chapter3.js';
-import { makeRuda, drawRudaChoice, drawLairAmbient } from './finale.js';
-import { drawHUD, drawCards, banner, text, button, panel, drawTouchControls, wrap } from './ui.js';
-import { drawBackground, drawVignette, BG_MAP } from '../art/backgrounds.js';
+import { makeRuda, drawRudaChoice, drawRudaChoiceP, drawLairAmbient } from './finale.js';
+import { drawHUD, drawCards, banner, text, button, panel, drawTouchControls, wrap, HUDBOX, withHud } from './ui.js';
+import { drawBackground, drawBackgroundView, bgPlace, drawVignette, BG_MAP } from '../art/backgrounds.js';
 import { drawSceneBg, preload } from '../art/scenes.js';
 import { drawCandy, drawPad, drawPanties, drawTampon, drawCup, drawSplat, drawPumpkin, drawStar, PAL } from '../art/sprites.js';
 import { drawChest, drawIcon } from '../art/icons.js';
@@ -17,11 +19,13 @@ import { sfx, playMusic, setMusicIntensity } from '../engine/audio.js';
 import { createBarks, DEATH_LINES, CLEAR_LINES } from './barks.js';
 import { newPet, petTarget, updatePet, petReact, petIdle, drawPet, drawPetBubble, PET_NOM } from './pets.js';
 import { loadAccVec, preloadAcc } from '../art/accessories.js';
-import { rollOffers, ensureOffers, buyOffer, shuffleOffers, drawOfferCard, offerPrice, hasMeta, SHUFFLE_PRICE, revealStart, revealTick, revealSkip, revealDone, revealBought, drawRevealOffers, drawRevealCandies } from './meta.js';
+import { rollOffers, consolation, drawGiftLine, ensureOffers, buyOffer, shuffleOffers, drawOfferCard, offerPrice, hasMeta, SHUFFLE_PRICE, revealStart, revealTick, revealSkip, revealDone, revealBought, drawRevealOffers, drawRevealCandies } from './meta.js';
 import { drawLipstickGlow, initPowerups, puWaveStart, enemyTimeScale, updatePowerups, puOnKill, puPickup, drawPuToken, drawUmbrella, drawPuScreen, tickPuScreen, drawPuHud } from './powerups.js';
 import { drawGrade, drawAmbient } from '../art/post.js';
 import { loadHeroineBack } from '../art/heroineVec.js';
 import { facingOf } from './achievements.js';
+import { drawCardsP, drawPauseP, drawClearP, drawChestHintP } from './overlays_p.js';
+import { drawDeathP as drawDeathPortrait } from './death_p.js';
 
 const BELL_SHOTS = new Set(['tampon', 'gatling', 'shot', undefined]);   // таблетки, пар, метла и прочее тыкву не трогают
 const HURT_NAMES = { droplet: 'капелька', drop: 'капля', diver: 'пикирующая капля', jelly: 'желе', popcorn: 'попкорн Мисс Спазм', crier: 'капля-плакса', spazm: 'Спазмик', bloat: 'Великое Вздутие', fart: 'облако', spout: 'фонтанчик', ghost: 'Призрак Перепадов', craving: 'Тяга к сладкому' };
@@ -48,7 +52,7 @@ export function createPlay(app) {
   function continueRun(chapter) {
     const R = G.run; R.chapter = chapter; R.chapterTime = 0; R.damageTaken = 0;
     G.enemies = []; G.shots = []; G.foes = []; G.pickups = []; G.fx = []; G.stains = [];
-    G.boss = null; G.chest = null; G.fog = 0; G.p.hp = Math.min(G.stats.maxHp, G.p.hp + 2); G.p.dead = false; G.p.x = 480; G.p.y = GROUND; G.p.vx = 0; G.p.vy = 0;
+    G.boss = null; G.chest = null; G.fog = 0; G.p.hp = Math.min(G.stats.maxHp, G.p.hp + 2); G.p.dead = false; G.p.x = view.W / 2; G.p.y = GROUND; G.p.vx = 0; G.p.vy = 0;
     preloadChapter(chapter);
     initPowerups(G, app.save.meta); G.flash = 0; G.puTitle = null; G.runStartBark = 'runStart'; G.ceasefire = false;
     startWave(0);
@@ -97,7 +101,7 @@ export function createPlay(app) {
     const wv = chapter().waves[i];
     G.run.counter = wv.counter; G.run.counterStart = wv.counter;
     G.run.floorHits = 0; G.run.waveDamage = 0; G.run.waveTime = 0; G.run.goldenDone = false; G.run.goldenAt = null;
-    G.introDone = false; G.budget = 2; G.nextType = wv.intro;
+    G.introDone = false; G.budget = wv.soft ? 0 : 2; G.nextType = wv.intro;   // мягкий вход: первая капля не сразу, а секунды через две
     G.phase = 'intro'; G.phaseT = 0;
     G.waveLabel = `${chapter().name} · волна ${i + 1} из ${chapter().waves.length}`;
     G.bannerText = [`Волна ${i + 1}`, wv.hint];
@@ -122,7 +126,7 @@ export function createPlay(app) {
   G.densestY = (x) => {
     if (G.boss) return G.boss.y;
     let y = 300, n = 0; for (const e of G.enemies) if (Math.abs(e.x - x) < 90) { y += e.y; n++; }
-    return n ? clamp((y - 300) / n, 60, 440) : 300;
+    return n ? clamp((y - 300) / n, 60, GROUND - 42) : 300;
   };
   G.freeze = (s) => app.game.freeze(s);
   G.shake = (a) => { G.trauma = Math.min(1, G.trauma + a); };
@@ -187,7 +191,7 @@ export function createPlay(app) {
     if (big) { G.shake(0.15); G.freeze(0.04); }
     // опыт и конфеты
     dropPickup('xp', e.x, e.y, Math.max(1, Math.round(e.xp * (1 + 0.1 * G.waveIndex))));
-    if (Math.random() < 0.045 * S.greed) dropPickup('candy', e.x, e.y, 1);
+    if (Math.random() < (e.xp >= 4 ? 0.24 : e.xp >= 2 ? 0.12 : 0.075) * S.greed) dropPickup('candy', e.x, e.y, 1);   // раньше 4,5 %: на первую смерть не хватало ни на одну покупку
     if (Math.random() < 0.012 * S.luck) dropItem(e.x, e.y);
     // деление
     if (e.type === 'drop') for (const s of [-1, 1]) G.enemies.push(makeEnemy('droplet', e.x + s * 8, e.y, G.waveIndex, { vy: -60, vx: s * 40 }));
@@ -230,7 +234,7 @@ export function createPlay(app) {
       G.bark('floor');
     }
     // протечка: счётчик ушёл далеко вверх
-    if (G.phase === 'wave' && R.counter > R.counterStart * 1.5) { R.counter = R.counterStart; G.hurtPlayer('Протечка'); G.floaters.add(480, 200, 'Протечка!', { size: 34, color: '#ff4a5a', life: 1.2 }); }
+    if (G.phase === 'wave' && R.counter > R.counterStart * (chapter().waves[R.wave].leak ?? 1.5)) { R.counter = R.counterStart; G.hurtPlayer('Протечка'); G.floaters.add(view.W / 2, view.H * 0.37, 'Протечка!', { size: 34, color: '#ff4a5a', life: 1.2 }); }
   };
 
   G.hurtPlayer = (why) => {
@@ -238,7 +242,7 @@ export function createPlay(app) {
     const R = G.run;
     if (R.shield) { R.shield = false; p.iframes = 1; sfx('heal', { pitch: 0.7 }); G.floaters.add(p.x, p.y - 120, 'Щит!', { color: '#bfe8ff' }); return; }
     if (Math.random() < G.stats.armor) { p.iframes = 0.6; G.floaters.add(p.x, p.y - 120, 'Плед спас!', { color: '#ffd0dc', size: 16 }); sfx('heal', { pitch: 1.3 }); return; }
-    p.hp--; p.iframes = 0.8; p.hurtFlash = 0.15; R.damageTaken++; R.waveDamage++; R.bossHits = (R.bossHits || 0) + 1;
+    p.hp--; p.iframes = G.A?.iframes ?? 0.8; p.hurtFlash = 0.15; R.damageTaken++; R.waveDamage++; R.bossHits = (R.bossHits || 0) + 1;
     R.combo = 0; R.comboMul = 1;
     G.freeze(0.08); G.shake(0.4); sfx('hurt');
     if (navigator.vibrate && app.save.settings.vibrate) navigator.vibrate(40);
@@ -264,7 +268,7 @@ export function createPlay(app) {
   }
   function dropItem(x, y) {
     const it = weighted([{ k: 'pad', w: 4 }, { k: 'panties', w: G.p.hp < G.stats.maxHp ? 3 : 1 }, { k: 'pack', w: 2 }, { k: 'cupItem', w: 1.5 }]).k;
-    G.pickups.push({ kind: it, x: clamp(x, 60, 900), y: Math.min(y, 100), vx: 0, vy: 40, t: 0, life: 30, rot: 0, item: true });
+    G.pickups.push({ kind: it, x: clamp(x, 60, view.W - 60), y: Math.min(y, 100), vx: 0, vy: 40, t: 0, life: 30, rot: 0, item: true });
   }
 
   // ---------- Прокачка ----------
@@ -313,7 +317,7 @@ export function createPlay(app) {
     const R = G.run, w = R.weapons.find(w => w.id === id); if (!w) return;
     w.id = WEAPONS[id].evo; w.lv = 1; w.cdT = 0;
     app.save.stats.evolutions++; app.emit({ type: 'evolve' }, R);
-    G.floaters.add(480, 200, 'ЭВОЛЮЦИЯ!', { size: 40, color: '#ffd166', life: 1.6 });
+    G.floaters.add(view.W / 2, view.H * 0.37, 'ЭВОЛЮЦИЯ!', { size: 40, color: '#ffd166', life: 1.6 });
     sfx('ach'); G.shake(0.3);
   }
   function addCandies(n) { const v = Math.round(n * G.stats.greed * G.run.comboMul * (G.pu?.magnet > 0 ? 1.5 : 1)); G.run.candies += v; app.save.stats.candiesTotal += v; app.emit({ type: 'candy' }, G.run); }
@@ -328,10 +332,11 @@ export function createPlay(app) {
     const p = G.p; p.dead = true; G.phase = 'dead'; G.phaseT = 0;
     app.save.stats.deaths++; app.emit({ type: 'death' }, G.run);
     app.save.barkMem = { lastDeathBy: G.lastHurt, lastWasDeath: true }; G.deathLine = pick(DEATH_LINES);
-    rollOffers(app.save);
+    rollOffers(app.save, { cheap: app.save.stats.deaths <= 2 });   // первые смерти: без дорогих редких карточек
     G.parts.burst(p.x, p.y - 60, 40, { color: ['#ff3a4a', '#ff9ab8', '#fff', '#ffd166'], speed: [100, 400], g: 500, life: [0.5, 1.2], shape: 'star', size: [3, 7] });
     sfx('boom'); G.freeze(0.2); G.shake(0.8);
     bankCandies(false);
+    G.run.gift = consolation(app.save); if (G.run.gift) app.persist();   // «Утешительный приз»: гарантирует покупки (meta.js)
     playMusic('defeat', { then: 'calm' });
   }
   function bankCandies(win) {
@@ -345,8 +350,8 @@ export function createPlay(app) {
     G.phase = 'bossIntro'; G.phaseT = 0;
     if (chapter().boss === 'bloat') {
       // «виртуальный» босс: сам томат — враги-куски в G.enemies, здесь только имя и общая полоса HP
-      G.boss = { id: 'bloat', name: 'Великое Вздутие', virtual: true, x: 480, y: 200, r: 0, hp: BLOAT_TOTAL, maxHp: BLOAT_TOTAL, state: 'fight', slams: [], dark: 0, eyeT: 0, invuln: 0, t: 0 };
-      G.enemies.push(makeEnemy('bloat', 480, 120, 0, { size: 0, vx: 85, vy: 0 }));
+      G.boss = { id: 'bloat', name: 'Великое Вздутие', virtual: true, x: view.W / 2, y: ARENA.sky + 200, r: 0, hp: BLOAT_TOTAL, maxHp: BLOAT_TOTAL, state: 'fight', slams: [], dark: 0, eyeT: 0, invuln: 0, t: 0 };
+      G.enemies.push(makeEnemy('bloat', view.W / 2, ARENA.sky + 120, 0, { size: 0, vx: 85, vy: 0 }));
     } else G.boss = chapter().boss === 'queen' ? makeQueen() : chapter().boss === 'ruda' ? makeRuda() : makeSpasm();
     G.waveLabel = `${chapter().name} · босс`;
     G.run.bossHits = 0; G.run.bossDmg = 0;
@@ -370,7 +375,7 @@ export function createPlay(app) {
     for (const f of G.foes) f.dead = true;
     if (b.slams) b.slams = []; if (b.waves) b.waves = []; b.rain = null;
     for (let i = 0; i < 25; i++) dropPickup('candy', b.x + rand(-60, 60), b.y, 1);
-    if (b.deathLine && !peaceful) { G.floaters.add(clamp(b.x, 200, 760), 330, b.deathLine, { size: 24, color: '#ffd0dc', life: 2.6, vy: -20 }); setTimeout(() => G.say('Победила! …Но чай я всё-таки заварю. На двоих.', '#fff'), 900); }
+    if (b.deathLine && !peaceful) { G.floaters.add(clamp(b.x, 200, view.W - 200), view.H * 0.61, b.deathLine, { size: 24, color: '#ffd0dc', life: 2.6, vy: -20 }); setTimeout(() => G.say('Победила! …Но чай я всё-таки заварю. На двоих.', '#fff'), 900); }
     if (peaceful) G.say('Пока, Руда. Приходи без сюрпризов.', '#fff');
     G.chest = b.noChest ? null : { x: b.x, y: b.y, vy: -100, t: 0, landed: false };
     app.save.stats.bossKills++;
@@ -399,6 +404,7 @@ export function createPlay(app) {
   // ---------- Шаг симуляции ----------
   function updateWorld(dt) {
     const R = G.run, p = G.p, inp = app.inp;
+    G.A = assistFor(inp);   // сенсорная помощь (data.js TOUCH_ASSIST): на телефоне мягче; в тестах isTouch = false
     G.t += dt; R.time += dt; R.chapterTime += dt;
     if (G.phase === 'wave') R.waveTime += dt;
     if (!p.dead) {
@@ -413,7 +419,7 @@ export function createPlay(app) {
       // трусики-жалость: ранена и долго без лечения → прилетают сверху (1 сердце — быстрее)
       if (p.hp <= 1 && (G.phase === 'wave' || G.phase === 'boss')) {
         R.healPity = (R.healPity || 0) + dt;
-        if (R.healPity > 35 && !G.pickups.some(k => k.kind === 'panties')) { R.healPity = 0; G.pickups.push({ kind: 'panties', x: clamp(p.x + rand(-260, 260), 80, 880), y: -20, vx: 0, vy: 55, t: 0, life: 30, rot: 0, item: true }); }
+        if (R.healPity > 35 && !G.pickups.some(k => k.kind === 'panties')) { R.healPity = 0; G.pickups.push({ kind: 'panties', x: clamp(p.x + rand(-260, 260), 80, view.W - 80), y: -20, vx: 0, vy: 55, t: 0, life: 30, rot: 0, item: true }); }
       } else R.healPity = 0;
       // складной зонтик: щит от одного удара восстанавливается сам
       if (G.stats.umbCd && !R.shield) { R.umbT = (R.umbT || 0) + dt; if (R.umbT > G.stats.umbCd) { R.umbT = 0; R.shield = true; G.floaters.add(p.x, p.y - 130, 'Зонтик готов', { color: '#bfe8ff', size: 15 }); sfx('heal', { pitch: 1.6, vol: 0.4 }); } }
@@ -434,11 +440,11 @@ export function createPlay(app) {
     { const I = G.pu.freeze > 0 ? 0.1 : clamp(0.3 + G.enemies.length / 16 * 0.5 + (G.boss ? 0.3 : 0) + (p.hp <= 1 ? 0.2 : 0), 0, 1);
       G.musI = (G.musI ?? I) + (I - (G.musI ?? I)) * Math.min(1, dt / 1.2);
       if (Math.abs(G.musI - (G.musISent ?? -1)) > 0.05) { G.musISent = G.musI; setMusicIntensity(G.musI); } }
-    const edt = dt * enemyTimeScale(G);
+    const edt = dt * enemyTimeScale(G) * G.A.enemyTime;
     G.bossFreeze = Math.max(0, (G.bossFreeze || 0) - dt);
     if (G.phase === 'wave') director(edt);
     for (const e of G.enemies) updateEnemy(G, e, edt);
-    if (G.boss && !G.boss.dead && !G.boss.virtual) (G.boss.upd || updateBoss)(G, G.boss, G.bossFreeze > 0 ? 0 : G.pu.slow > 0 ? dt * 0.6 : dt);
+    if (G.boss && !G.boss.dead && !G.boss.virtual) (G.boss.upd || updateBoss)(G, G.boss, G.bossFreeze > 0 ? 0 : (G.pu.slow > 0 ? dt * 0.6 : dt) * G.A.bossTempo);
     if (G.boss && G.boss.virtual && !G.boss.dead) { // общая полоса: живые куски + их будущие дети
       const pot = s => s >= BLOAT_SIZES.length ? 0 : BLOAT_SIZES[s].hp + 2 * pot(s + 1);
       G.boss.hp = G.enemies.filter(e => e.type === 'bloat' && !e.dead).reduce((a, e) => a + Math.max(0, e.hp) + 2 * pot(e.size + 1), 0);
@@ -465,27 +471,29 @@ export function createPlay(app) {
     let adapt = 1; if (G.p.hp <= 1) adapt = 0.9; else if (R.waveTime > 20 && R.waveDamage === 0) adapt = 1.1;
     // нарастание: первая волна игры — обучение, дальше давление растёт
     const ramp = G.run.chapter === 0 ? [1.0, 1.25, 1.4, 1.45][R.wave] ?? 1.45 : 1.45;
-    G.budget += wv.budget * ramp * inten * adapt * dt;
+    // «мягкий вход» волны (wv.soft): первые t с — только простые капли, поток слабее и медленнее; последние 8 с плавно к обычному режиму
+    const soft = wv.soft, softOn = !!soft && R.waveTime < soft.t, sk = soft ? clamp((R.waveTime - (soft.t - 8)) / 8, 0, 1) : 1;
+    G.budget += wv.budget * ramp * inten * adapt * (soft ? soft.k + (1 - soft.k) * sk : 1) * dt;
     if (G.enemies.length >= 32) return;
-    if (!G.nextType) G.nextType = weighted(Object.entries(wv.mix).map(([k, w]) => ({ k, w }))).k;
-    const t = G.nextType, cost = ENEMIES[t].cost;
-    const CAP = { fart: 2, spout: 2, craving: 1, ghost: 3 };
-    if (CAP[t] && G.enemies.filter(e => e.type === t).length >= CAP[t]) { G.nextType = null; return; }
+    if (!G.nextType) G.nextType = weighted(Object.entries(softOn ? soft.mix : wv.mix).map(([k, w]) => ({ k, w }))).k;
+    const t = G.nextType, def = ENEMIES[t], cost = def.cost, kind = def.base || t;   // spazmj — тот же Спазмик с подскоками
+    const CAP = { fart: 2, spout: 2, craving: 1, ghost: 3, spazm: G.run.chapter === 1 && R.wave < 2 ? 1 : 2, spazmj: 1 };   // первое знакомство со Спазмиком: по одному
+    if (CAP[t] && G.enemies.filter(e => e.type === kind && !!e.hop === !!def.hop).length >= CAP[t]) { G.nextType = null; return; }
     if (t === 'jelly' && G.enemies.some(e => e.type === 'jelly' && e.size <= 1)) { G.nextType = null; return; }
     if (G.budget >= cost) {
       G.budget -= cost; G.nextType = null;
-      const x = t === 'jelly' ? (Math.random() < 0.5 ? 120 : 840) : rand(80, 880);
-      const spdK = 1 + 0.12 * Math.min(1, R.waveTime / 50);   // внутри волны капли разгоняются
-      G.enemies.push(makeEnemy(t, x, t === 'jelly' ? 60 : -30, G.waveIndex, t === 'jelly' ? { size: G.run.chapter === 0 ? 1 : 0, spdK } : { spdK }));
+      const x = t === 'jelly' ? (Math.random() < 0.5 ? 120 : view.W - 120) : rand(80, view.W - 80);
+      const spdK = (1 + 0.12 * Math.min(1, R.waveTime / 50)) * (soft ? soft.spd + (1 - soft.spd) * sk : 1);   // внутри волны капли разгоняются
+      G.enemies.push(makeEnemy(kind, x, t === 'jelly' ? 60 : -30, G.waveIndex, t === 'jelly' ? { size: G.run.chapter === 0 ? 1 : 0, spdK } : def.hop ? { spdK, hop: true } : { spdK }));
     }
     // прокладка по таймеру — связь с оригиналом (поймать = −5)
     if (hasMeta(app.save, 'v_golden') && !R.goldenDone && R.waveTime > (R.goldenAt ??= rand(8, 20))) {
-      R.goldenDone = true; const gx = rand(120, 840);
+      R.goldenDone = true; const gx = rand(120, view.W - 120);
       G.enemies.push(makeEnemy('droplet', gx, -20, G.waveIndex, { golden: true, count: 0, floor: 0, vy: 140 }));
       G.say('Золотая капля! Лови!', '#ffd166');
     }
     G.padTimer -= dt;
-    if (G.padTimer <= 0) { G.padTimer = rand(16, 24); G.pickups.push({ kind: 'pad', x: rand(120, 840), y: -20, vx: 0, vy: 55, t: 0, life: 30, rot: 0, item: true }); }
+    if (G.padTimer <= 0) { G.padTimer = rand(16, 24); G.pickups.push({ kind: 'pad', x: rand(120, view.W - 120), y: -20, vx: 0, vy: 55, t: 0, life: 30, rot: 0, item: true }); }
     if (R.counter <= 0) waveClear();
   }
 
@@ -496,11 +504,11 @@ export function createPlay(app) {
     for (const e of G.enemies) G.pop(e, true);
     for (const p of G.pickups) if (p.kind === 'xp' || p.kind === 'candy') p.magnet = true;
     sfx('ach', { pitch: 1.2 }); G.shake(0.3);
-    G.parts.burst(480, 200, 40, { color: ['#ffd166', '#ff7aa8', '#5ee6c8', '#fff'], speed: [150, 450], g: 400, life: [0.6, 1.2], shape: 'rect', size: [3, 6] });
-    addCandies(5 + R.wave * 2 + (R.floorHits === 0 ? 10 : 0));
+    G.parts.burst(view.W / 2, view.H * 0.37, 40, { color: ['#ffd166', '#ff7aa8', '#5ee6c8', '#fff'], speed: [150, 450], g: 400, life: [0.6, 1.2], shape: 'rect', size: [3, 6] });
+    addCandies(10 + R.wave * 4 + (R.floorHits === 0 ? 10 : 0));   // за чистую волну (было 5 + 2·волна)
     G.bark('waveClear');
     if (G.pet) petReact(G.pet, G.petId, 'clear');
-    if (hasMeta(app.save, 'v_rain')) for (let i = 0; i < 18; i++) setTimeout(() => { if (G.phase === 'clear') G.pickups.push({ kind: 'candy', x: rand(80, 880), y: -10, vx: rand(-20, 20), vy: rand(40, 120), v: 1, t: 0, life: 6, rot: 0 }); }, i * 110);
+    if (hasMeta(app.save, 'v_rain')) for (let i = 0; i < 18; i++) setTimeout(() => { if (G.phase === 'clear') G.pickups.push({ kind: 'candy', x: rand(80, view.W - 80), y: -10, vx: rand(-20, 20), vy: rand(40, 120), v: 1, t: 0, life: 6, rot: 0 }); }, i * 110);
     app.emit({ type: 'waveClear', floorHits: R.floorHits, damageTaken: R.waveDamage, lastY: R.lastKillY }, R);
   }
 
@@ -539,7 +547,7 @@ export function createPlay(app) {
     if (!p.dead) for (const e of G.enemies) {
       if (e.dead) continue;
       const cx = clamp(e.x, pb.x, pb.x + pb.w), cy = clamp(e.y, pb.y, pb.y + pb.h);
-      if ((e.x - cx) ** 2 + (e.y - cy) ** 2 < (e.r * 0.9) ** 2) {
+      if ((e.x - cx) ** 2 + (e.y - cy) ** 2 < (e.r * 0.9 * G.A.hit) ** 2) {
         if (e.type === 'spazm' && G.stats.boots) {
           if (p.vy > 60 && p.y < e.y) { p.vy = -420; G.kill(e, 'boots'); G.shake(0.2); sfx('thud', { pitch: 1.3 }); if (G.stats.boots >= 2) for (const f of G.enemies) if (!f.dead && f.type !== 'jelly' && f.type !== 'bloat' && Math.hypot(f.x - p.x, f.y - p.y) < 140) G.kill(f, 'boots'); }
           continue;
@@ -631,10 +639,11 @@ export function createPlay(app) {
     const sy = (0.6 * Math.sin(G.t * 53 + 0.7) + 0.4 * Math.sin(G.t * 97 + 2.1)) * 7 * tr;
     ctx.save(); ctx.translate(sx, sy);
     // параллакс: фон чуть уезжает против движения героини (рисуем с запасом 2 %)
-    { const dx = ((p.x - 480) / 480) * -7; ctx.save(); ctx.translate(480 + dx, 300); ctx.scale(1.02, 1.02); ctx.translate(-480, -300); drawBackground(ctx, chapter().bg, G.t); ctx.restore(); }
-    ctx.fillStyle = chapter().bg === 'lair' ? 'rgba(10,4,16,0.5)' : 'rgba(6,12,20,0.32)'; ctx.fillRect(-20, -20, 1000, 580); // фон тише врагов (читаемость)
+    // фон: cover-масштаб с привязкой к полу и прокруткой за героиней (art/backgrounds.js), плюс прежний лёгкий параллакс
+    { const W2 = view.W / 2, pv = view.H * 300 / 540, dx = ((p.x - W2) / W2) * -7; ctx.save(); ctx.translate(W2 + dx, pv); ctx.scale(1.02, 1.02); ctx.translate(-W2, -pv); drawBackgroundView(ctx, chapter().bg, G.t, p.x); ctx.restore(); }
+    ctx.fillStyle = chapter().bg === 'lair' ? 'rgba(10,4,16,0.5)' : 'rgba(6,12,20,0.32)'; ctx.fillRect(-20, -20, view.W + 40, view.H + 40); // фон тише врагов (читаемость)
     drawAmbient(ctx, chapter().bg, G.t);
-    if (chapter().bg === 'restroom') drawGothicAmbient(ctx, G.t); else if (chapter().bg === 'lair') drawLairAmbient(ctx, G.t);
+    if (chapter().bg === 'restroom') { ctx.save(); bgPlace(ctx, chapter().bg, p.x); drawGothicAmbient(ctx, G.t); ctx.restore(); } else if (chapter().bg === 'lair') drawLairAmbient(ctx, G.t);
     // пятна на полу
     for (const s of G.stains) { const a = 1 - s.t / s.life; ctx.fillStyle = `rgba(255,122,168,${0.5 * a})`; ctx.beginPath(); ctx.ellipse(s.x, GROUND + 4, s.w / 2, 5, 0, 0, TAU); ctx.fill(); ctx.fillStyle = `rgba(255,255,255,${0.3 * a})`; ctx.beginPath(); ctx.ellipse(s.x - s.w * 0.15, GROUND + 3, s.w * 0.12, 1.5, 0, 0, TAU); ctx.fill(); }
     // постоянные эффекты под персонажами
@@ -652,7 +661,7 @@ export function createPlay(app) {
     drawLipstickGlow(ctx, G);
     if (G.pet && !p.dead) drawPet(ctx, G.pet, G.petId, PET_NOM, { noBubble: true });   // питомец — за героиней
     drawPlayer(ctx, p, G.t);
-    if (G.pet && !p.dead && G.pet.bubble && !(G.bubble && G.bubble.t < G.bubble.life)) drawPetBubble(ctx, G.pet, PET_NOM);
+    if (G.pet && !p.dead && G.pet.bubble && !(G.bubble && G.bubble.t < G.bubble.life)) drawPetBubble(ctx, G.pet, PET_NOM, view.W - 6);
     drawUmbrella(ctx, G);
     if (G.muzzle > 0 && !p.dead) { const m = muzzle(p); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = muzzleColor(G); ctx.beginPath(); ctx.arc(m.x, m.y, 8, 0, TAU); ctx.fill(); ctx.globalCompositeOperation = 'source-over'; }
     drawWeaponFx(G, ctx);
@@ -669,7 +678,7 @@ export function createPlay(app) {
       ctx.globalAlpha = clamp(a, 0, 1);
       const st = b.style || 'say', fnt = (st === 'think' ? 'italic 800' : '900') + ' 15px Nunito, sans-serif';
       ctx.font = fnt; const w = ctx.measureText(b.s).width + 26;
-      const bx = clamp(p.x, w / 2 + 10, 950 - w / 2), by = p.y - 128 - (G.pu?.umbrella > 0 ? 64 : 0);
+      const bx = clamp(p.x, w / 2 + 10, view.W - 10 - w / 2), by = p.y - 128 - (G.pu?.umbrella > 0 ? 64 : 0);
       ctx.save(); ctx.translate(bx, by + 16); ctx.scale(pop, pop); ctx.translate(-bx, -by - 16);
       ctx.fillStyle = st === 'think' ? '#e6d9ff' : '#fff';
       if (st === 'shout') {
@@ -691,12 +700,12 @@ export function createPlay(app) {
       ctx.globalAlpha = 1;
     }
     // туман от облака
-    if (G.fog > 0) { const a = Math.min(1, G.fog / 1.5) * 0.55; const g = ctx.createLinearGradient(0, 0, 0, GROUND); g.addColorStop(0, `rgba(200,170,230,${a})`); g.addColorStop(1, `rgba(200,170,230,${a * 0.3})`); ctx.fillStyle = g; ctx.fillRect(0, 0, 960, GROUND); }
+    if (G.fog > 0) { const a = Math.min(1, G.fog / 1.5) * 0.55; const g = ctx.createLinearGradient(0, 0, 0, GROUND); g.addColorStop(0, `rgba(200,170,230,${a})`); g.addColorStop(1, `rgba(200,170,230,${a * 0.3})`); ctx.fillStyle = g; ctx.fillRect(0, 0, view.W, GROUND); }
     // темнота (фаза 3 босса): видно только круг вокруг Поппи
     if (G.boss && G.boss.dark > 0) {
       const a = Math.min(1, G.boss.dark / 0.5) * (0.85 + Math.sin(G.t * 23) * 0.05);
       const g = ctx.createRadialGradient(p.x, p.y - 60, 60, p.x, p.y - 60, 220);
-      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${a})`); ctx.fillStyle = g; ctx.fillRect(-20, -20, 1000, 580);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${a})`); ctx.fillStyle = g; ctx.fillRect(-20, -20, view.W + 40, view.H + 40);
     }
     ctx.restore();
     drawGrade(ctx, { bg: chapter().bg, hp: G.p.dead ? 0 : G.p.hp, maxHp: G.stats.maxHp, t: G.t, fight: true });
@@ -734,7 +743,12 @@ export function createPlay(app) {
     hasNext: () => G.run.chapter + 1 < CHAPTERS.length, run: () => G.run,
     G,
     update(dt, rdt) {
-      const inp = app.inp; inp.poll();
+      const inp = app.inp;
+      // тач: джойстик и прыжок работают только пока идёт бой (не пауза, не карточки, не экраны итогов)
+      inp.gameplay = !G.paused && !G.p.dead && LIVE.has(G.phase);
+      // оверлеи (карточки, смерть, итоги, выбор, пауза) живут в дизайн-рамке → указатель в её координатах
+      inp.setSpace(!ovPortrait() && (G.paused || OVERLAY.has(G.phase)) ? view.frame : null);   // в портрете оверлеи на полном виде — указатель в координатах вида
+      inp.poll();
       G.trauma = Math.max(0, G.trauma - 1.5 * rdt);
       if (G.slowmo > 0) { G.slowmo -= rdt; if (G.slowmo <= 0) app.game.timeScale = 1; }
       G.phaseT += rdt; tickPuScreen(G, rdt);
@@ -781,26 +795,68 @@ export function createPlay(app) {
     },
     updateFrozen(rdt) { G.trauma = Math.max(0, G.trauma - 1.5 * rdt); },
     draw(ctx) {
+      const game = app.game, inp = app.inp;
       drawWorld(ctx);
-      if (G.phase !== 'chapterClear' && G.phase !== 'choice') { drawHUD(ctx, G); drawPuHud(ctx, G, 40, G._noCounter ? 82 : 132); }
+      // HUD и бой — на полном виде (якорь по реальным краям экрана); оверлеи ниже — в дизайн-рамке 960×540 (engine/frame.js)
+      if (G.phase !== 'chapterClear' && G.phase !== 'choice') { drawHUD(ctx, G); withHud(ctx, 'tl', () => drawPuHud(ctx, G, HUDBOX.puX, HUDBOX.puY)); }
       if (G.boss && !G.boss.dead && G.phase !== 'bossIntro') drawBossBar(ctx, G.boss);
       if (G.phase === 'intro') banner(ctx, G.bannerText[0], G.bannerText[1], G.phaseT / 1.8);
       if (G.phase === 'clear') banner(ctx, 'ЧИСТО!', G.run.floorHits === 0 ? 'Ни одной капли на полу! +10 конфет' : null, Math.min(G.phaseT / 2.6, 1), '#5ee6c8');
       if (G.phase === 'bossIntro') banner(ctx, G.boss.name, G.boss.intro || 'Ей не понравился фильм…', G.phaseT / 2.4, '#ff9ad0');
-      if (G.phase === 'choice') { const c = drawRudaChoice(ctx, G, app.inp); if (c >= 0) G.choose2(c); }
-      if (G.phase === 'bossDead' && G.chest?.landed) text(ctx, 'Подойди к сундуку!', 480, 300, { size: 24, color: '#ffd166' });
-      drawTouchControls(ctx, app.inp);
-      // подсказка по управлению: первые секунды первого забега главы (на тач-экране есть кнопки)
-      if (!app.inp.isTouch && G.run.wave === 0 && G.run.time < 9 && ['intro', 'wave'].includes(G.phase)) { ctx.globalAlpha = Math.min(1, (9 - G.run.time) / 1.5); text(ctx, '← → или A D — бег   ·   Пробел — прыжок   ·   Esc — пауза', 480, 520, { size: 14, color: '#f3e2c0', lw: 3 }); ctx.globalAlpha = 1; }
-      if (G.phase === 'cards') {
-        G.cardRects = drawCards(ctx, G, G.cards, G.cardSel, G.cardAppear);
-        if (G.cards && G.run.rerolls > 0 && !G.cards.title && G.cardAppear > 0.35 && button(ctx, app.inp, 400, 462, 160, 44, `Перебор (${G.run.rerolls})`, { size: 17, color: '#8b5cf6' })) reroll();
+      if (G.phase === 'choice') { if (ovPortrait()) { const r = drawRudaChoiceP(ctx, G, inp); if (r >= 0) G.choose2(r); } else withFrame(game, ctx, c => { const r = drawRudaChoice(c, G, inp); if (r >= 0) G.choose2(r); }); }
+      if (G.phase === 'bossDead' && G.chest?.landed) { if (ovPortrait()) drawChestHintP(ctx, G, G.t); else text(ctx, 'Подойди к сундуку!', view.W / 2, view.H * 0.555, { size: 24, color: '#ffd166' }); }
+      drawTouchControls(ctx, inp);
+      // подсказка по управлению: первые секунды первого забега главы
+      if (G.run.wave === 0 && G.run.time < 9 && ['intro', 'wave'].includes(G.phase)) {
+        const a = Math.min(1, (9 - G.run.time) / 1.5);
+        if (!inp.isTouch) { ctx.globalAlpha = a; text(ctx, '← → или A D — бег   ·   Пробел — прыжок   ·   Esc — пауза', view.W / 2, view.H - 20, { size: 14, color: '#f3e2c0', lw: 3 }); ctx.globalAlpha = 1; }
+        else if (!app.save.touchHintDone) {   // тач: один раз за всё время игры, пока идут первые секунды первого забега
+          ctx.globalAlpha = a; const hy = view.ground - (view.portrait ? 230 : 170);
+          text(ctx, 'Веди пальцем влево и вправо', view.W / 2, hy, { size: 22, color: '#f3e2c0', lw: 4 });
+          text(ctx, 'Прыжок — касание справа', view.W / 2, hy + 30, { size: 22, color: '#f3e2c0', lw: 4 }); ctx.globalAlpha = 1;
+          if (G.run.time > 6.5) { app.save.touchHintDone = true; app.persist(); }
+        }
       }
-      if (G.phase === 'dead') drawDeath(ctx);
-      if (G.phase === 'chapterClear') drawChapterClear(ctx);
-      if (G.paused) drawPause(ctx);
+      // Оверлеи: ландшафт — дизайн-рамка 960×540 по центру вида (эмбиент по краям); портрет (ovPortrait) — своя раскладка на полном виде 540×H
+      if (G.phase === 'cards') {
+        if (ovPortrait()) {
+          const o = drawCardsP(ctx, G, G.cards, G.cardSel, G.cardAppear, inp); G.cardRects = o.rects;
+          if (o.reroll && G.cardAppear > 0.35 && button(ctx, inp, o.reroll.x, o.reroll.y, o.reroll.w, o.reroll.h, `Перебор (${G.run.rerolls})`, { size: 26, color: '#8b5cf6' })) reroll();
+        } else withFrame(game, ctx, c => {
+          G.cardRects = drawCards(c, G, G.cards, G.cardSel, G.cardAppear);
+          if (G.cards && G.run.rerolls > 0 && !G.cards.title && G.cardAppear > 0.35 && button(c, inp, 400, 462, 160, 44, `Перебор (${G.run.rerolls})`, { size: 17, color: '#8b5cf6' })) reroll();
+        });
+      }
+      if (G.phase === 'dead') { if (ovPortrait()) drawDeathP(ctx); else withFrame(game, ctx, drawDeath, { ambient: true }); }
+      if (G.phase === 'chapterClear') { if (ovPortrait()) drawChapterClear(ctx, true); else withFrame(game, ctx, drawChapterClear, { ambient: true }); }
+      if (G.paused) { if (ovPortrait()) drawPause(ctx, true); else withFrame(game, ctx, drawPause); }
     },
   };
+  // Сцена боя рисуется на ПОЛНОМ виде (арена = view.W, пол = view.ground); портретную раскладку делает сама (HUD, джойстик).
+  scene.frame = false; scene.portraitLayout = true;
+  // Оверлеи боя (карточки, смерть, итоги, выбор Руды, пауза, подсказка сундука): в портрете рисуются сами на полном виде (overlays_p.js, death_p.js);
+  // false — вернуть старую заглушку (дизайн-рамка 960×540 с эмбиентом). Ландшафт всегда в дизайн-рамке.
+  scene.overlayPortraitLayout = true;
+  const ovPortrait = () => view.portrait && scene.overlayPortraitLayout;
+  const OVERLAY = new Set(['cards', 'dead', 'chapterClear', 'choice']);
+  const LIVE = new Set(['intro', 'wave', 'clear', 'boss', 'bossIntro', 'bossDead']);
+
+  // Смена размера окна / поворот телефона во время боя: позиции переносятся с сохранением относительного места
+  // (по x — пропорционально ширине арены, у пола — на то же расстояние от пола, выше — растяжением), без «телепортов».
+  onViewChange((v, prev) => {
+    if (!G.run || !G.p) return;
+    const fx = v.W / prev.W, g0 = prev.ground, g1 = v.ground, k0 = g0 - 250, ky = k0 > 0 ? (g1 - 250) / k0 : 1;
+    const mx = x => x * fx, my = y => y >= k0 ? y + (g1 - g0) : y * ky;
+    const mv = o => { if (!o) return; for (const k of ['x', 'baseX', 'hugX', 'tx']) if (typeof o[k] === 'number') o[k] = mx(o[k]); for (const k of ['y', 'hoverY']) if (typeof o[k] === 'number') o[k] = my(o[k]); };
+    mv(G.p); mv(G.pet); mv(G.chest); mv(G.boss);
+    for (const arr of [G.enemies, G.shots, G.foes, G.pickups, G.fx]) for (const o of arr || []) mv(o);
+    for (const s of G.stains || []) s.x = mx(s.x);
+    if (G.boss) { for (const s of G.boss.slams || []) if (typeof s.x === 'number') s.x = mx(s.x); for (const w of G.boss.waves || []) w.x = mx(w.x); G.boss.rain = null; if (G.boss.letters) G.boss.letters = null; }
+    for (const e of G.enemies || []) if (e.aim) { e.aim.x = mx(e.aim.x); e.aim.y = my(e.aim.y); }
+    G.p.x = clamp(G.p.x, ARENA.left + G.p.w / 2, ARENA.right - G.p.w / 2);
+    if (G.p.y > GROUND) G.p.y = GROUND;
+    if (G.pet) G.pet.placed = false;
+  });
 
   function updateCards(rdt) {
     const inp = app.inp; G.cardAppear += rdt;
@@ -836,10 +892,10 @@ export function createPlay(app) {
   function drawDeath(ctx) {
     const T = G.phaseT, S = app.save;
     // раскрытие награды: своё на каждую смерть (новый забег или время фазы пошло заново)
-    if (!G.rv || G.rv.run !== G.run || T < (G.rv.lastT ?? 0)) { ensureOffers(S); G.rv = revealStart(S, { mode: 'death', earned: G.run.candies, jar: { x: 884, y: 130 }, bag: { x: 912, y: 194 }, run: G.run }); }
+    if (!G.rv || G.rv.run !== G.run || T < (G.rv.lastT ?? 0)) { ensureOffers(S); G.rv = revealStart(S, { mode: 'death', earned: G.run.candies, gift: G.run.gift, jar: { x: 884, y: 130 }, bag: { x: 912, y: 194 }, run: G.run }); }
     const rv = G.rv; rv.lastT = T; revealTick(rv, Math.max(0, T - 0.3));
     const k = Math.min(1, T / 0.4);
-    ctx.fillStyle = `rgba(30,0,10,${0.75 * k})`; ctx.fillRect(0, 0, 960, 540);
+    fillFull(ctx, `rgba(30,0,10,${0.75 * k})`);
     if (T < 0.2) return;
     // экран смерти оригинала: девочка на закате (вектор с Sprite19) и надпись от руки
     ctx.globalAlpha = Math.min(1, (T - 0.2) / 0.4); drawSceneBg(ctx, 'dead'); ctx.globalAlpha = 1;
@@ -856,7 +912,8 @@ export function createPlay(app) {
     ctx.fillStyle = '#ff7aa8'; ctx.beginPath(); ctx.roundRect(545, 60, 360 * pct / 100, 12, 6); ctx.fill();
     text(ctx, `Уровень ${G.run.level} · серия ${G.run.bestCombo} · капель сбито ${G.run.kills}`, 725, 92, { size: 14, color: '#ffe6ef', outline: false, weight: 700 });
     drawRevealCandies(ctx, rv, S, 545, 130);
-    if (G.lastHurt) text(ctx, `Подвело: ${G.lastHurt === 'Протечка' ? 'протечка (счётчик капель вырос)' : (HURT_NAMES[G.lastHurt] || G.lastHurt)}`, 725, 168, { size: 13, color: '#ffb0c0', outline: false, weight: 700 });
+    drawGiftLine(ctx, rv, 545, 154);   // «Утешительный приз +N» (первая смерть и короткие забеги): отдельной строкой под «+N конфет за забег»
+    if (G.lastHurt) text(ctx, `Подвело: ${G.lastHurt === 'Протечка' ? 'протечка (счётчик капель вырос)' : (HURT_NAMES[G.lastHurt] || G.lastHurt)}`, 725, 177, { size: 13, color: '#ffb0c0', outline: false, weight: 700 });
     drawOffers(ctx, 204);
     const fin = revealDone(rv);
     if (button(ctx, app.inp, 300, 448, 170, 52, 'Ещё раз', { color: '#ff5d8f' }) || (fin && app.inp.uiHit('Enter'))) { startRun(G.run.chapter); return; }
@@ -877,22 +934,38 @@ export function createPlay(app) {
     if (res.shuffle && shuffleOffers(S)) { app.persist(); sfx('whoosh'); }
     if (res.buy && buyOffer(S, res.buy)) { revealBought(rv, res.buy); app.persist(); sfx('coin', { pitch: 1.3 }); app.emit({ type: 'metaBuy' }); computeStats(); }
   }
-  function drawChapterClear(ctx) {
-    drawSceneBg(ctx, 'victory'); ctx.fillStyle = 'rgba(20,4,18,0.55)'; ctx.fillRect(0, 0, 960, 540);
+  // Портретный экран смерти (death_p.js): покупки и перетасовка — те же функции экономики, что и в ландшафте (drawOffers)
+  function offerActions(res, rv) {
+    const S = app.save;
+    if (res.shuffle && shuffleOffers(S)) { app.persist(); sfx('whoosh'); }
+    if (res.buy && buyOffer(S, res.buy)) { revealBought(rv, res.buy); app.persist(); sfx('coin', { pitch: 1.3 }); app.emit({ type: 'metaBuy' }); computeStats(); }
+  }
+  const deathEnv = { G, app, chapter: () => chapter(), HURT_NAMES, startRun: ch => startRun(ch), act: offerActions };
+  const drawDeathP = ctx => drawDeathPortrait(ctx, deathEnv);
+  function drawChapterClear(ctx, portrait = false) {
     const fin = G.run.chapter === CHAPTERS.length - 1;
-    text(ctx, fin ? (G.run.ending === 'hug' ? 'Мир!' : 'Победа!') : 'Сеанс окончен!', 480, 90, { size: 48, color: fin && G.run.ending === 'hug' ? '#ff9ab8' : '#5ee6c8' });
-    text(ctx, G.clearLine ? `«${G.clearLine}»` : `Глава «${chapter().name}» пройдена`, 480, 132, { size: 18, color: '#ffd0dc' });
-    panel(ctx, 260, 165, 440, 190);
+    const title = fin ? (G.run.ending === 'hug' ? 'Мир!' : 'Победа!') : 'Сеанс окончен!', titleColor = fin && G.run.ending === 'hug' ? '#ff9ab8' : '#5ee6c8';
+    const line = G.clearLine ? `«${G.clearLine}»` : `Глава «${chapter().name}» пройдена`;
     const R = G.run, m = Math.floor(R.chapterTime / 60), s = Math.floor(R.chapterTime % 60);
     const rows = [['Время', `${m}:${String(s).padStart(2, '0')}`], ['Уровень', R.level], ['Капель сбито', R.kills], ['Лучшая серия', R.bestCombo], ['Конфет заработано', R.candies]];
-    rows.forEach(([a, b], i) => { text(ctx, a, 290, 195 + i * 32, { size: 18, align: 'left', weight: 700, outline: false, color: '#ffe6ef' }); text(ctx, String(b), 670, 195 + i * 32, { size: 20, align: 'right', color: '#ffd166' }); });
     const NEXT = ['Дальше — очередь в туалет и глава 2 «Улица»', 'Дальше — заброшенный замок и глава 3 «Готика»', 'Дальше — логово Руды. Финал',
       G.run.ending === 'hug' ? 'Концовка «Мир»: Руда вернётся через месяц — с чаем и пледом' : 'Концовка «Война»: Руда обещала вернуться через 28 дней'];
+    if (portrait) { if (drawClearP(ctx, { inp: app.inp, title, titleColor, line, rows, next: NEXT[G.run.chapter] || '' }) || app.inp.uiHit('Enter')) app.afterChapter(G.run.chapter); return; }
+    drawSceneBg(ctx, 'victory'); ctx.fillStyle = 'rgba(20,4,18,0.55)'; ctx.fillRect(0, 0, 960, 540);
+    text(ctx, title, 480, 90, { size: 48, color: titleColor });
+    text(ctx, line, 480, 132, { size: 18, color: '#ffd0dc' });
+    panel(ctx, 260, 165, 440, 190);
+    rows.forEach(([a, b], i) => { text(ctx, a, 290, 195 + i * 32, { size: 18, align: 'left', weight: 700, outline: false, color: '#ffe6ef' }); text(ctx, String(b), 670, 195 + i * 32, { size: 20, align: 'right', color: '#ffd166' }); });
     text(ctx, NEXT[G.run.chapter] || '', 480, 385, { size: 15, color: '#c9b0ff', outline: false, weight: 700 });
     if (button(ctx, app.inp, 395, 420, 170, 56, 'Дальше', { color: '#ff5d8f' }) || app.inp.uiHit('Enter')) app.afterChapter(G.run.chapter);
   }
-  function drawPause(ctx) {
-    ctx.fillStyle = 'rgba(15,4,14,0.7)'; ctx.fillRect(0, 0, 960, 540);
+  function drawPause(ctx, portrait = false) {
+    if (portrait) {
+      const r = drawPauseP(ctx, app.inp, app.save.settings.sfx > 0);
+      if (r === 'cont') G.paused = false; else if (r === 'sound') app.toggleSound(); else if (r === 'quit') { G.paused = false; die(); }
+      return;
+    }
+    fillFull(ctx, 'rgba(15,4,14,0.7)');
     text(ctx, 'Пауза', 480, 140, { size: 48 });
     if (button(ctx, app.inp, 380, 200, 200, 56, 'Продолжить')) { G.paused = false; }
     if (button(ctx, app.inp, 380, 270, 200, 56, app.save.settings.sfx > 0 ? 'Звук: вкл' : 'Звук: выкл', { color: '#8b5cf6' })) app.toggleSound();
@@ -904,7 +977,7 @@ export function createPlay(app) {
 
   // Хуки для автотестов (develop-web-game)
   scene.toText = () => ({
-    coords: 'origin top-left, x→right, y→down, 960x540, floor y=482',
+    coords: `origin top-left, x→right, y→down, view ${view.W}x${view.H}${view.portrait ? ' (portrait)' : ''}, floor y=${GROUND}`,
     phase: G.phase, chapter: G.run.chapter, wave: G.run.wave + 1, counter: Math.ceil(G.run.counter),
     player: { x: Math.round(G.p.x), y: Math.round(G.p.y), hp: G.p.hp, maxHp: G.stats.maxHp, onGround: G.p.onGround },
     level: G.run.level, xp: Math.round(G.run.xp), xpNext: G.run.xpNext, candies: G.run.candies, combo: G.run.combo,
@@ -914,5 +987,6 @@ export function createPlay(app) {
     ending: G.run.ending || null, cards: G.cards ? G.cards.list.map(c => c.name) : null, hurtBy: G.run.hurtBy || {}, kills: G.run.kills, time: Math.round(G.run.time), shots: G.shots.length, pickups: G.pickups.length,
   });
   scene.choose = choose;
+  scene.hooks = { openCards, buildCards, die, openChest, chapterClear, startRun };   // для автотестов (tools/portover.mjs)
   return scene;
 }

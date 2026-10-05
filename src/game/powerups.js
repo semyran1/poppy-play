@@ -4,6 +4,7 @@
 import { rand, clamp, weighted, TAU } from '../engine/util.js';
 import { sfx } from '../engine/audio.js';
 import { GROUND } from './player.js';
+import { view } from '../engine/core.js';
 
 export const PU = {
   freeze:   { name: 'Пауза', sub: 'Враги замерли', dur: 3.5, color: '#c9a878' },
@@ -63,7 +64,7 @@ export function puOnKill(G, e) {
   if (!opts.length) return;
   const id = weighted(opts).k;
   D.lastDrop = G.t; D.waveDrops++; D.sinceT = 0; D.lastKind = id;
-  G.pickups.push({ kind: 'pu', id, x: clamp(e.x, 50, 910), y: e.y, vx: rand(-40, 40), vy: -220, t: 0, life: 7.5 });
+  G.pickups.push({ kind: 'pu', id, x: clamp(e.x, 50, view.W - 50), y: e.y, vx: rand(-40, 40), vy: -220, t: 0, life: 7.5 });
 }
 
 export function puPickup(G, k, bark) {
@@ -87,7 +88,7 @@ function popper(G) {
   }
   for (const f of G.foes) f.dead = true;
   if (G.boss && !G.boss.virtual) G.damageBoss(G.boss.maxHp * 0.03, 'popper');
-  G.parts.burst(480, 200, 60, { color: ['#ffd166', '#ff7aa8', '#5ee6c8', '#c9b0ff', '#fff'], speed: [150, 500], g: 350, life: [0.6, 1.3], shape: 'rect', size: [3, 6] });
+  G.parts.burst(view.W / 2, view.H * 0.37, 60, { color: ['#ffd166', '#ff7aa8', '#5ee6c8', '#c9b0ff', '#fff'], speed: [150, 500], g: 350, life: [0.6, 1.3], shape: 'rect', size: [3, 6] });
 }
 
 // Купол зонтика над Поппи ловит капли сверху (−1 к счётчику без «+2»), гасит слёзы и семечки
@@ -166,17 +167,17 @@ export function drawUmbrella(ctx, G) {
 // Экранные эффекты бонусов (поверх мира, под интерфейсом)
 export function drawPuScreen(ctx, G) {
   if (G.pu.freeze > 0) {
-    ctx.save(); ctx.globalCompositeOperation = 'color'; ctx.globalAlpha = 0.35; ctx.fillStyle = '#c9a878'; ctx.fillRect(0, 0, 960, 540); ctx.restore();
-    const y = 120 + ((G.t * 160) % 300); ctx.fillStyle = 'rgba(255,241,201,0.10)'; ctx.fillRect(0, y, 960, 3);
-    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(G.t * 6); ctx.fillStyle = '#f3e2c0'; ctx.fillRect(452, 60, 14, 40); ctx.fillRect(476, 60, 14, 40); ctx.globalAlpha = 1;
+    ctx.save(); ctx.globalCompositeOperation = 'color'; ctx.globalAlpha = 0.35; ctx.fillStyle = '#c9a878'; ctx.fillRect(0, 0, view.W, view.H); ctx.restore();
+    const y = 120 + ((G.t * 160) % (view.H - 240)); ctx.fillStyle = 'rgba(255,241,201,0.10)'; ctx.fillRect(0, y, view.W, 3);
+    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(G.t * 6); ctx.fillStyle = '#f3e2c0'; { const py = view.portrait ? 210 : 60; ctx.fillRect(view.W / 2 - 28, py, 14, 40); ctx.fillRect(view.W / 2 - 4, py, 14, 40); } ctx.globalAlpha = 1;
   }
-  if (G.pu.slow > 0) { ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = 0.3; ctx.fillStyle = '#6b2fa3'; ctx.fillRect(0, 0, 960, 540); ctx.restore(); }
-  if (G.flash > 0) { ctx.fillStyle = `rgba(255,241,201,${G.flash})`; ctx.fillRect(0, 0, 960, 540); }
+  if (G.pu.slow > 0) { ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = 0.3; ctx.fillStyle = '#6b2fa3'; ctx.fillRect(0, 0, view.W, view.H); ctx.restore(); }
+  if (G.flash > 0) { ctx.fillStyle = `rgba(255,241,201,${G.flash})`; ctx.fillRect(0, 0, view.W, view.H); }
   // название подобранного бонуса
   const T = G.puTitle;
   if (T && T.t < 1.4) {
     const a = T.t < 0.12 ? T.t / 0.12 : T.t > 1.1 ? (1.4 - T.t) / 0.3 : 1, sc = T.t < 0.12 ? 1.4 - 0.4 * (T.t / 0.12) : 1;
-    ctx.save(); ctx.globalAlpha = Math.max(0, a); ctx.translate(480, 150); ctx.scale(sc, sc); ctx.textAlign = 'center';
+    ctx.save(); ctx.globalAlpha = Math.max(0, a); ctx.translate(view.W / 2, view.portrait ? 260 : 150); ctx.scale(sc, sc); ctx.textAlign = 'center';
     ctx.font = '900 28px Nunito, sans-serif'; ctx.lineWidth = 6; ctx.strokeStyle = '#0e0612'; ctx.strokeText(T.name, 0, 0); ctx.fillStyle = T.color; ctx.fillText(T.name, 0, 0);
     ctx.font = '800 15px Nunito, sans-serif'; ctx.lineWidth = 4; ctx.strokeText(T.sub, 0, 24); ctx.fillStyle = '#f3e2c0'; ctx.fillText(T.sub, 0, 24);
     ctx.restore();

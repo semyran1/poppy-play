@@ -2,14 +2,19 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#07040a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Поппи: Хэллоуинский кошмар</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; height: 100%; background: #07040a; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
-  body { display: flex; align-items: center; justify-content: center; }
-  canvas { display: block; image-rendering: auto; touch-action: none; }
+  /* Холст занимает окно целиком (размер подбирает src/engine/core.js по пропорции окна); системные жесты отключены */
+  html, body { margin: 0; width: 100%; height: 100%; background: #07040a; overflow: hidden; overscroll-behavior: none; touch-action: none;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  body { position: fixed; inset: 0; height: 100dvh; }
+  canvas { position: fixed; left: 0; top: 0; display: block; image-rendering: auto; touch-action: none; outline: none; background: #07040a; }
 </style>
 </head>
 <body>

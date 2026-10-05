@@ -4,11 +4,13 @@ import { rand, pick, clamp } from '../engine/util.js';
 import { sfx } from '../engine/audio.js';
 import { drawSpasm, drawTentacle } from '../art/icons.js';
 import { makeEnemy } from './enemies.js';
-import { GROUND } from './player.js';
+import { GROUND, ARENA } from './player.js';
+import { view } from '../engine/core.js';
+import { HUDBOX } from './ui.js';
 
 export function makeSpasm() {
   return {
-    id: 'spasm', name: 'Мисс Спазм', x: 480, y: -160, r: 72, s: 1,
+    id: 'spasm', name: 'Мисс Спазм', x: view.W / 2, y: -160, r: 72, s: 1,
     hp: 9000, maxHp: 9000, phase: 1, t: 0, hitT: 0, invuln: 0,
     state: 'enter', st: 0, last: null, eyeT: 0, dark: 0, slams: [],
     lines: { 2: 'Ой, кто-то злится!', 3: 'Свет! Мотор! СПАЗМ!' },
@@ -28,17 +30,17 @@ export function updateBoss(G, b, dt) {
   const ph = b.hp < b.maxHp * 0.33 ? 3 : b.hp < b.maxHp * 0.66 ? 2 : 1;
   if (ph > b.phase) { b.phase = ph; b.invuln = 1; G.freeze(0.12); G.shake(0.6); G.say(b.lines[ph], '#ff9ad0'); sfx('bossHit', { pitch: 0.6 }); b.state = 'idle'; b.st = 0; }
 
-  if (b.state === 'enter') { b.y += (120 - b.y) * Math.min(1, dt * 2.5); if (b.st > 1.6) { b.state = 'idle'; b.st = 0; } return; }
+  if (b.state === 'enter') { b.y += (ARENA.sky + 120 - b.y) * Math.min(1, dt * 2.5); if (b.st > 1.6) { b.state = 'idle'; b.st = 0; } return; }
   // плавает над игроком
-  const tx = clamp(G.p.x + Math.sin(b.t * 0.7) * 160, 160, 800);
+  const tx = clamp(G.p.x + Math.sin(b.t * 0.7) * 160, 160, view.W - 160);
   b.x += (tx - b.x) * Math.min(1, dt * 0.8);
-  b.y = 120 + Math.sin(b.t * 1.6) * 10;
+  b.y = ARENA.sky + 120 + Math.sin(b.t * 1.6) * 10;
 
   if (b.state === 'idle') {
     if (b.st > (b.phase === 1 ? 1.3 : 0.9)) {
       let a; do { a = pick(ATTACKS[b.phase]); } while (a === b.last && ATTACKS[b.phase].length > 1);
       b.last = a; b.state = a; b.st = 0; b.done = false;
-      if (a === 'slam' || a === 'slam2') { b.slams = [{ x: G.p.x, t: 0, warn: 1.0 }]; if (a === 'slam2') b.slams.push({ x: clamp(960 - G.p.x + rand(-60, 60), 80, 880), t: -0.55, warn: 1.0 }); sfx('zap', { pitch: 0.4 }); }
+      if (a === 'slam' || a === 'slam2') { b.slams = [{ x: G.p.x, t: 0, warn: 1.0 }]; if (a === 'slam2') b.slams.push({ x: clamp(view.W - G.p.x + rand(-60, 60), 80, view.W - 80), t: -0.55, warn: 1.0 }); sfx('zap', { pitch: 0.4 }); }
     }
   } else if (b.state === 'slam' || b.state === 'slam2') {
     let all = true;
@@ -58,7 +60,7 @@ export function updateBoss(G, b, dt) {
   } else if (b.state === 'popcorn') {
     const n = b.phase === 1 ? 10 : 14;
     if (!b.done) { b.done = true; b.spawned = 0; G.say('Попкорн-дождь!', '#ffe08a'); }
-    if (b.spawned < n && b.st > b.spawned * 0.16) { b.spawned++; G.enemies.push(makeEnemy('popcorn', rand(80, 880), -20, G.waveIndex)); }
+    if (b.spawned < n && b.st > b.spawned * 0.16) { b.spawned++; G.enemies.push(makeEnemy('popcorn', rand(80, view.W - 80), -20, G.waveIndex)); }
     if (b.st > 2.6) { b.state = 'idle'; b.st = 0; }
   } else if (b.state === 'summon') {
     if (!b.done) { b.done = true; for (let i = 0; i < 4 + b.phase; i++) G.enemies.push(makeEnemy(i % 3 ? 'droplet' : 'diver', b.x + rand(-80, 80), b.y + 40, G.waveIndex)); sfx('pop', { pitch: 0.6 }); }
@@ -71,9 +73,9 @@ export function updateBoss(G, b, dt) {
 
 export function drawBoss(G, ctx, b) {
   // луч проектора за боссом
-  const g = ctx.createLinearGradient(480, -40, b.x, b.y + 60);
+  const g = ctx.createLinearGradient(view.W / 2, -40, b.x, b.y + 60);
   g.addColorStop(0, 'rgba(255,240,200,0.0)'); g.addColorStop(1, 'rgba(255,240,200,0.16)');
-  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(470, -10); ctx.lineTo(490, -10); ctx.lineTo(b.x + 110, b.y + 80); ctx.lineTo(b.x - 110, b.y + 80); ctx.fill();
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(view.W / 2 - 10, -10); ctx.lineTo(view.W / 2 + 10, -10); ctx.lineTo(b.x + 110, b.y + 80); ctx.lineTo(b.x - 110, b.y + 80); ctx.fill();
   // подсказки ударов — тень колонны и мигание
   for (const s of b.slams) {
     if (s.t >= 0 && s.t < s.warn) {
@@ -91,11 +93,14 @@ export function drawBoss(G, ctx, b) {
 
 // Полоса HP босса с засечками фаз
 export function drawBossBar(ctx, b) {
-  const x = 230, y = 60, w = 500, h = 14;
+  // раскладку даёт HUD (ui.js): в ландшафте под полосой опыта, в портрете — под рядами сердец/опыта/счётчика
+  const w = HUDBOX.bossW, x = -w / 2, y = 0, h = 14;
+  ctx.save(); ctx.translate(HUDBOX.bossCx, HUDBOX.bossY); ctx.scale(HUDBOX.ui, HUDBOX.ui);
   ctx.fillStyle = 'rgba(20,0,20,0.7)'; ctx.beginPath(); ctx.roundRect(x - 4, y - 4, w + 8, h + 8, 9); ctx.fill();
   ctx.fillStyle = '#5a1a4a'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 7); ctx.fill();
   const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#ff5aa8'); g.addColorStop(1, '#c85aa0');
   ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(x, y, Math.max(0, w * b.hp / b.maxHp), h, 7); ctx.fill();
   ctx.fillStyle = 'rgba(255,255,255,0.8)'; for (const f of [0.33, 0.66]) ctx.fillRect(x + w * f - 1, y - 2, 2, h + 4);
-  ctx.font = '900 15px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#2a0a14'; ctx.strokeText(b.name, 480, y - 9); ctx.fillStyle = '#ffd6ec'; ctx.fillText(b.name, 480, y - 9);
+  ctx.font = '900 15px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#2a0a14'; ctx.strokeText(b.name, 0, y - 9); ctx.fillStyle = '#ffd6ec'; ctx.fillText(b.name, 0, y - 9);
+  ctx.restore();
 }

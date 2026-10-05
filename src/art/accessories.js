@@ -6,6 +6,7 @@
 // (рисунок вместо бластера по двум точкам «дуло → хват»), след выстрела. Питомец рисуется вне рига (src/game/pets.js).
 
 import { drawVec, drawVecRaw } from './vec.js';
+import { view } from '../engine/core.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -236,7 +237,7 @@ export function gunErasePolys(outfit, poseKey, acc) {
 export function drawAccOverlay(ctx, part, poseKey, outfit, acc, t = 0, pose = {}) {
   if (!acc) return;
   const A = (ACC_ANCHORS[poseKey] || ACC_ANCHORS.aim)[outfit] || (ACC_ANCHORS[poseKey] || ACC_ANCHORS.aim).pajama;
-  const tr = ctx.getTransform(), base = globalThis.ACC_BASE || (ctx.canvas?.width || 960) / 960;   // логический px игры
+  const tr = ctx.getTransform(), base = globalThis.ACC_BASE || (view.scale * view.dpr);   // логический px игры
   const m = Math.hypot(tr.a, tr.b) / base;                    // экранных px на 1 px листа
   // мелкие предметы в бою (рост ~100 px) чуть крупнее, иначе их не разглядеть
   const R = { A, m, hs: A.hs, t, pose, poseKey, boost: clamp(1 + (0.13 - m) * 3.5, 1, 1.2) };

@@ -3,9 +3,15 @@
 import { clamp } from '../engine/util.js';
 import { sfx } from '../engine/audio.js';
 import { drawHeroine, heroineMuzzle } from '../art/heroine.js';
+import { view, onViewChange } from '../engine/core.js';
 
-export const GROUND = 482;
-export const ARENA = { left: 40, right: 920 };
+// Геометрия боя живёт от динамического вида (engine/core.js): пол — H − 58 (в 960×540 это 482), арена — всю ширину вида.
+// GROUND — живая привязка (export let): импортёры видят новое значение после смены размера окна.
+// ARENA.sky — сдвиг «верхних» высот (парение боссов, плакс, пикировщиков) вниз на высоком виде, чтобы действие не уезжало вверх.
+export let GROUND = view.ground;
+export const ARENA = { left: 40, right: view.W - 40, sky: 0 };
+function syncArena() { GROUND = view.ground; ARENA.right = view.W - 40; ARENA.sky = Math.max(0, view.H - 540) * 0.55 + (view.uiScale - 1) * 45 + (!view.portrait && view.W / view.uiScale < 800 ? 70 : 0); }   // + запас под увеличенный HUD на маленьких экранах
+onViewChange(syncArena); syncArena();
 
 const IMG = {};
 // Игровая модель — оригинальная Поппи с бластером из Construct 3, повёрнутая как в раскладке оригинала (242°);
@@ -43,7 +49,7 @@ function tint(im, color) {
 
 export function createPlayer(stats) {
   return {
-    x: 480, y: GROUND, vx: 0, vy: 0, w: 30, h: 88, runU: 0, outfit: 'pajama', facing: 'front',
+    x: view.W / 2, y: GROUND, vx: 0, vy: 0, w: 30, h: 88, runU: 0, outfit: 'pajama', facing: 'front',
     onGround: true, coyote: 0, jumpBuf: 0, jumpsLeft: 0,
     face: 1, runT: 0, sx: 1, sy: 1,
     hp: stats.maxHp, iframes: 0, dead: false, hurtFlash: 0,
@@ -54,10 +60,7 @@ export function createPlayer(stats) {
 export function updatePlayer(p, inp, dt) {
   const st = p.stats;
   const maxSpd = 340 * st.moveSpeed;
-  let target = inp.move;
-  if (inp.touchTargetX !== null) { // тач: идём к пальцу, с мёртвой зоной
-    const d = inp.touchTargetX - p.x; target = Math.abs(d) < 10 ? 0 : clamp(d / 60, -1, 1);
-  }
+  let target = inp.move;   // −1…1: клавиатура ±1, плавающий джойстик тача — дробное значение (аналоговая скорость)
   const accel = p.onGround ? 3200 : 2200;
   const want = target * maxSpd;
   if (Math.abs(want) > 1) p.vx += clamp(want - p.vx, -accel * dt, accel * dt);

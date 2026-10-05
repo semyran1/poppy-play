@@ -4,6 +4,7 @@ import { rand, clamp, TAU } from '../engine/util.js';
 import { drawDrop, drawClot, drawFart, PAL } from '../art/sprites.js';
 import { drawPopcorn } from '../art/icons.js';
 import { GROUND, ARENA } from './player.js';
+import { view } from '../engine/core.js';
 import { initExtra, updateExtra, drawExtra } from './chapter2.js';
 import { initC3, updateC3, drawC3 } from './chapter3.js';
 
@@ -11,7 +12,7 @@ export function makeEnemy(type, x, y, w, o = {}) {
   const d = ENEMIES[type];
   const hpMul = 1 + 0.18 * w + 0.012 * w * w, spdMul = Math.min(1.75, 0.78 + 0.065 * w) * (o.spdK || 1);   // самая первая волна — обучение, капли медленнее
   const e = { type, x, y, vx: 0, vy: d.spd * spdMul, r: d.r, hp: d.hp * hpMul, maxHp: d.hp * hpMul, count: d.count, floor: d.floor, xp: d.xp, dmg: d.dmg, t: 0, seed: rand(10), hitT: 0, slowT: 0, slowK: 0, ...o };
-  if (type === 'diver') { e.state = 'enter'; e.hoverY = rand(90, 170); e.vy = 160; e.hoverT = rand(1, 2); }
+  if (type === 'diver') { e.state = 'enter'; e.hoverY = ARENA.sky + rand(90, 170); e.vy = 160; e.hoverT = rand(1, 2); }
   if (type === 'jelly') {
     e.size = o.size ?? 0; e.r = d.sizes[e.size]; e.hp = (40 - e.size * 10) * hpMul; e.maxHp = e.hp;
     e.vx = o.vx ?? (Math.random() < 0.5 ? -75 : 75); e.vy = o.vy ?? 60; e.bounceH = d.bounce[e.size];
@@ -43,7 +44,7 @@ export function updateEnemy(G, e, dt) {
       } else {
         e.x += e.vx * k * dt; e.y += e.vy * k * dt; e.vx += Math.sin(e.t * 9) * 120 * dt;
         if (e.y + e.r >= GROUND) { G.pop(e, false); }
-        if (e.x < -40 || e.x > 1000) e.dead = true;
+        if (e.x < -40 || e.x > view.W + 40) e.dead = true;
       }
       break;
     case 'jelly': {

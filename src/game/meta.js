@@ -41,10 +41,12 @@ export function offerPrice(save, id) {
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 // Новая витрина: 1 сила + 2 разнообразия (чего не хватает — добираем другим типом)
-export function rollOffers(save) {
+export function rollOffers(save, o = {}) {
   const wsort = ids => ids.map(id => ({ id, k: Math.random() * (byId(id).rare ? 0.35 : 1) })).sort((a, b) => b.k - a.k).map(o => o.id);
-  const pw = wsort(META_POWER.filter(m => (save.meta[m.id] || 0) < m.max).map(m => m.id));
-  const vr = META_VARIETY.filter(m => !save.meta[m.id]).map(m => m.id);
+  let pw0 = META_POWER.filter(m => (save.meta[m.id] || 0) < m.max).map(m => m.id), vr0 = META_VARIETY.filter(m => !save.meta[m.id]).map(m => m.id);
+  // cheap (первые смерти): редкие карточки стоят 150–500 конфет — новичку они не по карману, витрина должна быть покупаемой
+  if (o.cheap) { const ok = id => !byId(id).rare; if (pw0.filter(ok).length + vr0.filter(ok).length >= 3) { pw0 = pw0.filter(ok); vr0 = vr0.filter(ok); } }
+  const pw = wsort(pw0), vr = vr0;
   const out = [];
   if (pw.length) out.push(pw[0]);
   const v2 = wsort(vr).reverse();
@@ -60,6 +62,20 @@ export function buyOffer(save, id) {
   save.candies -= price; save.meta[id] = (save.meta[id] || 0) + 1;
   save.offers = save.offers.filter(o => o !== id);
   return true;
+}
+// «Утешительный приз»: после ПЕРВОЙ смерти на счёте хватает минимум на две покупки с витрины (и не меньше FIRST_DEATH_BONUS сверху);
+// после 2–3-й смерти — минимум на одну (если короткий забег не набрал). Конфеты зачисляются сразу; возвращает { n, label } или null.
+export const FIRST_DEATH_BONUS = 25;
+export function consolation(save) {
+  const deaths = save.stats?.deaths || 0, prices = (save.offers || []).map(id => offerPrice(save, id)).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  let need = 0, min = 0, label = 'Утешительный приз';
+  if (!save.firstDeathGift && deaths <= 1) { save.firstDeathGift = true; need = prices[0] + (prices[1] || 0); min = FIRST_DEATH_BONUS; }
+  else if (deaths <= 3) { need = prices[0]; label = 'Подарок за смелость'; }
+  const n = Math.max(min, need - save.candies);
+  if (n <= 0) return null;
+  save.candies += n; save.stats.candiesTotal = (save.stats.candiesTotal || 0) + n;
+  return { n, label };
 }
 export const SHUFFLE_PRICE = 15;
 export function shuffleOffers(save) {
@@ -543,21 +559,23 @@ export function drawCosmeticBag(ctx, x, y, pulse = 0) {
 // Время rv.r — «время раскрытия» (секунды), пропуск просто перематывает его вперёд.
 // ======================================================================================================
 const FLY = 0.26, FLIP = 0.16, SHINE = 0.5, CARD0 = 0.3, GAP = 0.2, COUNT = 0.55;
+// портрет: карточки раскрываются по одной по центру экрана (вылет → переворот → пауза → полёт на своё место в столбике)
+const CARD0P = 0.35, GAPP = 0.55, P_FLY = 0.3, P_FLIP = 0.18, P_HOLD = 0.2, P_GLIDE = 0.3, P_TOT = P_FLY + P_FLIP + P_HOLD + P_GLIDE;
 export const CARD_W = 282, CARD_H = 210;
 
 export function revealStart(save, o = {}) {
   const offers = (save.offers || []).slice();
-  const rv = { r: 0, boost: 0, mode: o.mode || 'death', earned: Math.max(0, o.earned || 0), jar: o.jar || null, bag: o.bag || { x: 914, y: 212 },
+  const rv = { r: 0, boost: 0, mode: o.mode || 'death', earned: Math.max(0, o.earned || 0), gift: o.gift && o.gift.n > 0 ? o.gift : null, jar: o.jar || null, bag: o.bag || { x: 914, y: 212 },
     quip: (o.mode === 'clear' ? QUIPS_CLEAR : QUIPS_DEATH)[Math.floor(Math.random() * (o.mode === 'clear' ? QUIPS_CLEAR : QUIPS_DEATH).length)],
-    fx: [], slots: offers.map((id, k) => ({ id, s: CARD0 + k * GAP })), emptyS: CARD0, fired: {}, jarPulse: -9, bagPulse: -9, jarDisp: null, run: o.run };
+    fx: [], slots: offers.map((id, k) => ({ id, s: o.portrait ? CARD0P + k * GAPP : CARD0 + k * GAP })), emptyS: CARD0, fired: {}, jarPulse: -9, bagPulse: -9, jarDisp: null, run: o.run, p: !!o.portrait };
   // летящие в банку конфеты
   if (rv.jar && rv.earned > 0) {
     const n = Math.min(12, 3 + Math.floor(rv.earned / 6));
-    for (let k = 0; k < n; k++) rv.fx.push({ kind: 'fly', t0: 0.04 + k * 0.035, dur: 0.3, x0: 590 + Math.random() * 30, y0: 132, x1: rv.jar.x, y1: rv.jar.y - 6, arc: 26 + Math.random() * 20, color: [C.gold, C.pink, C.mint][k % 3], arrive: 'jar', idx: k, n });
+    for (let k = 0; k < n; k++) rv.fx.push({ kind: 'fly', t0: 0.04 + k * 0.035, dur: 0.3, x0: (o.flyFrom ? o.flyFrom.x : 590) + Math.random() * 30, y0: o.flyFrom ? o.flyFrom.y : 132, x1: rv.jar.x, y1: rv.jar.y - 6, arc: 26 + Math.random() * 20, color: [C.gold, C.pink, C.mint][k % 3], arrive: 'jar', idx: k, n });
   }
   return rv;
 }
-const revealEnd = rv => Math.max(COUNT, ...rv.slots.map(s => s.s + FLY + FLIP), rv.slots.length ? 0 : rv.emptyS + FLY);
+const revealEnd = rv => Math.max(COUNT, ...rv.slots.map(s => s.s + (rv.p ? P_TOT : FLY + FLIP)), rv.slots.length ? 0 : rv.emptyS + FLY);
 export const revealDone = rv => !!rv && rv.r >= revealEnd(rv);
 // now — время с начала раскрытия (с), например G.phaseT − задержка
 export function revealTick(rv, now) {
@@ -634,7 +652,7 @@ export function drawRevealOffers(ctx, rv, save, ui) {
   const live = rv.slots.filter(s => !s.bought).map(s => s.id);
   if (live.length !== offers.length || offers.some(id => !live.includes(id))) {
     const keep = rv.slots.filter(s => s.bought);
-    rv.slots = offers.map((id, k) => ({ id, s: r + 0.05 + k * 0.12 }));
+    rv.slots = offers.map((id, k) => ({ id, s: r + 0.05 + k * (rv.p ? 0.4 : 0.12) }));
     if (!offers.length && keep.length) rv.slots = keep;
   }
   // --- строка заголовка ---
@@ -756,6 +774,22 @@ function drawSoldOut(ctx, rv, cx, cy, d) {
   ctx.restore();
 }
 
+// Строка «Утешительный приз +N» (под «+N конфет за забег»): звезда, подпись и счёт; появляется после основной суммы
+const GIFT_T = 0.6;
+export function drawGiftLine(ctx, rv, x, y, sc = 1) {
+  if (!rv || !rv.gift) return;
+  const k = Math.min(1, Math.max(0, (rv.r - GIFT_T) / 0.4)); if (k <= 0) return;
+  if (!rv.fired.gift) { rv.fired.gift = true; if (k < 0.5) sfx('ach', { pitch: 1.5, vol: 0.5 }); }
+  const cnt = Math.round(rv.gift.n * easeOutCubic(k)), pop = 1 + 0.25 * (1 - easeOutCubic(k));
+  ctx.save(); ctx.globalAlpha = Math.min(1, k * 2.5); ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  ctx.translate(x, y + (1 - k) * 8); ctx.scale(sc, sc);
+  ctx.save(); ctx.translate(10, 0); ctx.rotate(rv.r * 2); ctx.scale(pop, pop); star5(ctx, 0, 0, 9, C.gold, 1.6); ctx.restore();
+  ctx.font = F(800, 15); ctx.fillStyle = C.pink; ctx.fillText(rv.gift.label, 28, 1);
+  const lw = ctx.measureText(rv.gift.label).width;
+  ctx.font = F(900, 20); ctx.lineJoin = 'round'; ctx.lineWidth = 5; ctx.strokeStyle = INK; ctx.strokeText(`+${cnt}`, 28 + lw + 12, 1); ctx.fillStyle = C.gold; ctx.fillText(`+${cnt}`, 28 + lw + 12, 1);
+  ctx.restore();
+}
+
 // Строка «+N конфет» со счётом и банка с итогом копилки (панель итогов забега)
 export function drawRevealCandies(ctx, rv, save, x, y) {
   const k = Math.min(1, Math.max(0, (rv.r - 0.04) / COUNT)), e = easeOutCubic(k);
@@ -769,7 +803,8 @@ export function drawRevealCandies(ctx, rv, save, x, y) {
   ctx.restore();
   ctx.font = F(800, 15); ctx.fillStyle = '#ffe6ef'; ctx.fillText('конфет за забег', x + 34 + tw, y + 2);
   if (rv.jar) {
-    const target = save.candies - Math.round(rv.earned * (1 - e));
+    const gk = rv.gift ? easeOutCubic(Math.min(1, Math.max(0, (rv.r - GIFT_T) / 0.4))) : 1;   // утешительный приз ложится в банку позже основной суммы
+    const target = save.candies - Math.round(rv.earned * (1 - e)) - (rv.gift ? Math.round(rv.gift.n * (1 - gk)) : 0);
     if (rv.jarDisp == null || k < 1) rv.jarDisp = target; else rv.jarDisp += (target - rv.jarDisp) * Math.min(1, (rv.dt || 0.016) * 9);
     const pulse = Math.max(0, 1 - (rv.r - rv.jarPulse) / 0.18);
     drawCandyJar(ctx, rv.jar.x, rv.jar.y, Math.min(1, save.candies / 400), pulse);
@@ -777,5 +812,219 @@ export function drawRevealCandies(ctx, rv, save, x, y) {
     const s = String(Math.round(rv.jarDisp)); ctx.strokeText(s, rv.jar.x - 24, y + 1); ctx.fillStyle = C.gold; ctx.fillText(s, rv.jar.x - 24, y + 1);
     ctx.font = F(700, 11); ctx.fillStyle = 'rgba(255,230,239,0.75)'; ctx.fillText('в копилке', rv.jar.x - 24, y + 20);
   }
+  ctx.restore();
+}
+
+// ======================================================================================================
+// Портретная витрина (экран смерти на полном виде 540×H, death_p.js): широкая карточка предложения, раскрытие по центру экрана
+// (карточка вылетает рубашкой вверх, переворачивается, конфетти — и летит на своё место в столбике), пустые и купленные слоты.
+// ======================================================================================================
+const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+// Широкая карточка (столбик): лента типа сверху, медальон слева, название и описание, справа — высокая кнопка «Купить» с ценой в конфетах.
+// o: { minF, btnH, btnW, t, glow, shine, flash, stamp }; btn(label, x, y, w, h, extra) → true при нажатии
+export function drawOfferWide(ctx, save, id, x, y, w, h, btn, i, o = {}) {
+  const m = byId(id); if (!m) return false;
+  const power = isPower(id), price = offerPrice(save, id), r = save.meta[id] || 0, rare = !!m.rare;
+  const t = o.t ?? nowT(), can = save.candies >= price, tc = tierColors(id), fs = o.minF || 17, bought = o.stamp != null;
+  let res = false;
+  ctx.save();
+  if (o.glow > 0) { ctx.save(); ctx.globalAlpha *= o.glow; ctx.shadowColor = tc.glow; ctx.shadowBlur = rare ? 30 : 20; ctx.fillStyle = tc.glow; ctx.beginPath(); ctx.roundRect(x + 2, y + 2, w - 4, h - 4, 12); ctx.fill(); ctx.restore(); }
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.roundRect(x + 4, y + 6, w, h, 12); ctx.fill();
+  cardBody(ctx, x, y, w, h, rare, t);
+  ctx.save(); ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.clip();
+  if (rare) {
+    const k = ((t * 0.42 + i * 0.31) % 1.5) / 1.2; if (k <= 1) sweep(ctx, x, y, w, h, k, 0.6, 38);
+    for (let k2 = 0; k2 < 6; k2++) twinkle(ctx, x + 30 + ((k2 * 97) % (w - 60)), y + 30 + ((k2 * 61) % (h - 44)), 5, t, k2 * 1.7, '#fff');
+  }
+  if (o.shine != null && o.shine >= 0 && o.shine <= 1) sweep(ctx, x, y, w, h, o.shine, 0.75, 52);
+  ctx.restore();
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 12);
+  if (rare) { ctx.lineWidth = 3.5; ctx.strokeStyle = '#c8901a'; ctx.stroke(); ctx.beginPath(); ctx.roundRect(x + 4, y + 4, w - 8, h - 8, 9); ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.stroke(); }
+  else { ctx.lineWidth = 2; ctx.strokeStyle = C.shade; ctx.stroke(); }
+  // лента типа
+  const rh = fs + 11;
+  ctx.fillStyle = power ? C.velvet : C.dusk; ctx.beginPath(); ctx.roundRect(x, y, w, rh, [12, 12, 0, 0]); ctx.fill();
+  ctx.font = F(900, fs - 1); ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = power ? C.gold : C.mint; ctx.fillText(power ? 'СИЛА' : 'РАЗНООБРАЗИЕ', x + 14, y + rh / 2 + 1);
+  let right = x + w - 14;
+  if (power) { for (let k = m.max - 1; k >= 0; k--) { ctx.fillStyle = k < r ? C.gold : 'rgba(243,226,192,0.3)'; ctx.beginPath(); ctx.roundRect(right - 12, y + rh / 2 - 3, 12, 7, 2); ctx.fill(); right -= 17; } right -= 4; }
+  if (rare) { ctx.fillStyle = C.gold; ctx.textAlign = 'right'; ctx.font = F(900, fs - 1); ctx.fillText('★ РЕДКОЕ', right, y + rh / 2 + 1); ctx.textAlign = 'left'; }
+  // медальон
+  const bh = h - rh, ib = clampN(bh - 18, 56, 88), icx = x + 14 + ib / 2, icy = y + rh + bh / 2;
+  drawMetaIcon(ctx, id, icx, icy, ib, { t });
+  if (rare) { ctx.save(); ctx.translate(icx + ib * 0.38, icy - ib * 0.38); ctx.rotate(Math.sin(t * 2) * 0.15); ctx.beginPath(); for (let k = 0; k < 16; k++) { const a = k * TAU / 16, rr = k % 2 ? 9 : 11; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); inkFill(ctx, C.gold, 1.6); star5(ctx, 0, 0, 6, '#fff6d8', 1.2); ctx.restore(); }
+  // кнопка справа (высокая, цена внутри)
+  const bw = o.btnW || 122, btnH = Math.min(bh - 14, o.btnH || 56), bx = x + w - 12 - bw, by = y + rh + (bh - btnH) / 2;
+  const tx = x + 14 + ib + 12, tw = bx - 10 - tx;
+  fitFont(ctx, m.name, 900, 22, tw); ctx.fillStyle = C.ink; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(m.name, tx, y + rh + 20);
+  let ds = Math.min(19, fs + 2), dl; const availT = bh - 40;
+  for (; ds >= fs; ds--) { ctx.font = F(700, ds); dl = wrapLines(ctx, m.desc, tw); if (dl.length * ds * 1.17 <= availT) break; }
+  if (ds < fs) { ds = fs; ctx.font = F(700, ds); dl = wrapLines(ctx, m.desc, tw); }
+  ctx.font = F(700, ds); ctx.fillStyle = '#5a3020'; ctx.textAlign = 'left'; dl.forEach((ln, k) => ctx.fillText(ln, tx, y + rh + 44 + k * ds * 1.17));
+  if (!bought) {
+    const after = (c, bw2, bh2) => {
+      c.save(); c.translate(0, bh2 * 0.2); c.font = F(900, fs + 5); c.textAlign = 'left'; c.textBaseline = 'middle';
+      const pw = c.measureText(String(price)).width, x0 = -(26 + pw) / 2;
+      drawCandy(c, x0 + 11, 1, 1.15, { color: can ? C.gold : C.pink }); c.lineJoin = 'round'; c.lineWidth = 4; c.strokeStyle = INK; c.strokeText(String(price), x0 + 26, 2); c.fillStyle = can ? C.gold : '#ffb0b8'; c.fillText(String(price), x0 + 26, 2);
+      c.restore();
+    };
+    res = btn(can ? 'Купить!' : 'Не хватает', bx, by, bw, btnH, { disabled: !can, i, color: rare ? '#d4891a' : power ? '#b0243a' : '#6b2fa3', size: fs + 3, dy: -btnH * 0.16, after });
+  }
+  if (o.flash > 0) { ctx.save(); ctx.globalAlpha *= o.flash; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.fill(); ctx.restore(); }
+  if (bought) stampKUPLENO(ctx, x + w / 2, y + h / 2 + 6, o.stamp, true);
+  ctx.restore();
+  return res;
+}
+function drawEmptySlotP(ctx, x, y, W, H, a, fs) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha *= a;
+  ctx.fillStyle = 'rgba(14,6,18,0.45)'; ctx.beginPath(); ctx.roundRect(x, y, W, H, 12); ctx.fill();
+  ctx.setLineDash([7, 6]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,154,184,0.6)'; ctx.stroke(); ctx.setLineDash([]);
+  drawCosmeticBag(ctx, x + 52, y + H / 2, 0);
+  const tall = H >= 100;
+  ctx.font = F(900, fs + 2); ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.pink; ctx.fillText('Уже в косметичке ✓', x + 92, y + H / 2 - (tall ? 13 : 0));
+  if (tall) { ctx.font = F(700, fs); ctx.fillStyle = 'rgba(243,226,192,0.75)'; ctx.fillText('новое — после следующего забега', x + 92, y + H / 2 + 16); }
+  ctx.restore();
+}
+function drawPlaceholderP(ctx, x, y, W, H, fs, pulse = 0) {
+  ctx.save(); ctx.fillStyle = 'rgba(14,6,18,0.32)'; ctx.beginPath(); ctx.roundRect(x, y, W, H, 12); ctx.fill();
+  ctx.setLineDash([7, 6]); ctx.lineWidth = 2; ctx.strokeStyle = `rgba(255,154,184,${0.3 + 0.3 * pulse})`; ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = F(900, fs + 14); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = `rgba(243,226,192,${0.2 + 0.2 * pulse})`; ctx.fillText('?', x + W / 2, y + H / 2 + 2);
+  ctx.restore();
+}
+function drawBoughtSlotP(ctx, rv, sl, x, y, W, H, k, o) {
+  const d = rv.r - sl.bought;
+  if (d > 0.95) { drawEmptySlotP(ctx, x, y, W, H, Math.min(1, (d - 0.95) / 0.25), o.minF); return; }
+  if (d < 0.55) { drawOfferWide(ctx, rv._save, sl.id, x, y, W, H, () => false, k, { ...o, t: rv.r, stamp: d / 0.16, glow: 0.4 }); return; }
+  const f = easeInCubic(Math.min(1, (d - 0.55) / 0.4)), cx = x + W / 2, cy = y + H / 2;
+  if (!sl.flewToBag) { sl.flewToBag = true; rv.fx.push({ kind: 'fly', t0: rv.r + 0.4 * (1 - f), dur: 0.001, x0: rv.bag.x, y0: rv.bag.y, x1: rv.bag.x, y1: rv.bag.y, arc: 0, arrive: 'bag', color: C.gold, hidden: true }); }
+  const px = cx + (rv.bag.x - cx) * f, py = cy + (rv.bag.y - cy) * f - Math.sin(Math.PI * f) * 60, sc = 1 - 0.92 * f;
+  drawEmptySlotP(ctx, x, y, W, H, f, o.minF);
+  ctx.save(); ctx.translate(px, py); ctx.rotate(f * 1.2); ctx.scale(sc, sc);
+  drawOfferWide(ctx, rv._save, sl.id, -W / 2, -H / 2, W, H, () => false, k, { ...o, t: rv.r, stamp: 1 });
+  ctx.restore();
+}
+// витрина пуста: билет «АНШЛАГ»
+function drawSoldOutP(ctx, rv, rc, d, fs) {
+  if (d < 0) return;
+  const e = easeOutBack(Math.min(1, d / FLY)), w = rc.w, h = Math.min(150, Math.max(rc.h, 128)), cx = rc.x + w / 2, cy = rc.y + h / 2;
+  if (!rv.fired.empty) { rv.fired.empty = true; if (d < 0.2) sfx('whoosh'); }
+  ctx.save(); ctx.translate(cx, cy + (1 - e) * 300); ctx.rotate((1 - e) * -0.2 - 0.02);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.roundRect(-w / 2 + 4, -h / 2 + 6, w, h, 14); ctx.fill();
+  const g = ctx.createLinearGradient(0, -h / 2, 0, h / 2); g.addColorStop(0, '#3a1648'); g.addColorStop(1, C.duskD);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 14); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = C.gold; ctx.stroke();
+  ctx.fillStyle = C.velvet; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, 92, h, [14, 0, 0, 14]); ctx.fill();
+  ctx.fillStyle = 'rgba(243,226,192,0.4)'; for (let yy = -h / 2 + 8; yy < h / 2 - 6; yy += 10) { ctx.beginPath(); ctx.arc(-w / 2 + 92, yy, 2, 0, TAU); ctx.fill(); }
+  drawCosmeticBag(ctx, -w / 2 + 46, 0, Math.max(0, Math.sin(rv.r * 3)) * 0.15);
+  const tcx = -w / 2 + 92 + (w - 92) / 2;
+  ctx.save(); ctx.translate(tcx, -h * 0.24); ctx.rotate(-0.06 + Math.sin(rv.r * 2) * 0.02);
+  ctx.strokeStyle = C.gold; ctx.lineWidth = 4; ctx.beginPath(); ctx.roundRect(-104, -24, 208, 48, 8); ctx.stroke();
+  ctx.font = F(900, 34); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.gold; ctx.fillText('АНШЛАГ!', 0, 2); ctx.restore();
+  ctx.font = F(800, fs); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.paper; ctx.fillText('Всё с витрины уже в косметичке.', tcx, h * 0.12);
+  ctx.font = F(700, fs); ctx.fillStyle = '#ffd0dc'; ctx.fillText('Новое — после следующего забега', tcx, h * 0.12 + fs * 1.4);
+  for (let k = 0; k < 5; k++) twinkle(ctx, -w / 2 + 120 + k * (w - 160) / 4, -h / 2 + 18 + (k % 2) * (h - 36), 6, rv.r, k * 1.4, C.gold);
+  ctx.restore();
+}
+// ui: { M:{minF}, view:{W,H}, hdr:{x,y,w,size}, shuf:{x,y,w,h}|null, rects:[{x,y,w,h}], stage:{cx,cy,sc}, header, btn, shuffleBtn, btnH } → { buy, shuffle }
+export function drawRevealOffersP(ctx, rv, save, ui) {
+  const out = { buy: null, shuffle: false }, r = rv.r, offers = save.offers || [], fs = ui.M.minF, VW = ui.view.W, VH = ui.view.H, st = ui.stage;
+  rv._save = save;
+  const live = rv.slots.filter(s => !s.bought).map(s => s.id);
+  if (live.length !== offers.length || offers.some(id => !live.includes(id))) {
+    const keep = rv.slots.filter(s => s.bought);
+    rv.slots = offers.map((id, k) => ({ id, s: r + 0.05 + k * 0.4 }));
+    if (!offers.length && keep.length) rv.slots = keep;
+  }
+  // --- заголовок витрины ---
+  const hk = Math.min(1, Math.max(0, (r - 0.1) / 0.22));
+  if (hk > 0) {
+    if (!rv.fired.head && r - 0.1 < 0.2) sfx('thud', { pitch: 1.3 }); rv.fired.head = true;
+    ctx.save(); ctx.translate(ui.hdr.x, ui.hdr.y); const sc = 1.5 - 0.5 * easeOutBack(hk); ctx.scale(sc, sc); ctx.globalAlpha = Math.min(1, hk * 2);
+    fitFont(ctx, ui.header, 900, ui.hdr.size, ui.hdr.w); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = C.night; ctx.strokeText(ui.header, 0, 0);
+    const g = ctx.createLinearGradient(0, -12, 0, 12); g.addColorStop(0, '#fff1c9'); g.addColorStop(1, C.gold); ctx.fillStyle = g; ctx.fillText(ui.header, 0, 0);
+    ctx.restore();
+  }
+  // косметичка (сюда улетают покупки)
+  const bagP = Math.max(0, 1 - (r - rv.bagPulse) / 0.35);
+  drawCosmeticBag(ctx, rv.bag.x, rv.bag.y, bagP);
+  ctx.save(); ctx.font = F(900, fs - 1); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 4; ctx.strokeStyle = C.night; ctx.strokeText('косметичка', rv.bag.x, rv.bag.y + 28); ctx.fillStyle = 'rgba(243,226,192,0.9)'; ctx.fillText('косметичка', rv.bag.x, rv.bag.y + 28); ctx.restore();
+  if (revealDone(rv) && offers.length === 3 && !save.offerShuffled && ui.shuf && ui.shuffleBtn(ui.shuf.x, ui.shuf.y, ui.shuf.w, ui.shuf.h)) out.shuffle = true;
+  // --- слоты ---
+  const n = rv.slots.length;
+  if (!n) { drawSoldOutP(ctx, rv, ui.rects[0], r - rv.emptyS, fs); drawFx(ctx, rv); return out; }
+  const stage = [], base = { minF: fs, btnH: ui.btnH };
+  const wideBtn = (label, bx, by, bw, bh, o) => ui.btn(label, bx, by, bw, bh, o);
+  rv.slots.forEach((sl, k) => {
+    const R = ui.rects[k]; if (!R) return;
+    sl.cx = R.x + R.w / 2; sl.cy = R.y + R.h / 2;
+    const d = r - sl.s;
+    if (sl.bought != null) { drawBoughtSlotP(ctx, rv, sl, R.x, R.y, R.w, R.h, k, base); return; }
+    if (d < 0) { drawPlaceholderP(ctx, R.x, R.y, R.w, R.h, fs); return; }
+    const stageEnd = P_FLY + P_FLIP + P_HOLD;
+    if (d < stageEnd) { drawPlaceholderP(ctx, R.x, R.y, R.w, R.h, fs, 1); stage.push({ sl, k, d, R, g: 0 }); return; }
+    const g = Math.min(1, (d - stageEnd) / P_GLIDE);
+    if (g < 1) { drawPlaceholderP(ctx, R.x, R.y, R.w, R.h, fs); ctx.save(); ctx.globalAlpha *= easeOutCubic(g); drawOfferWide(ctx, save, sl.id, R.x, R.y, R.w, R.h, fakeBtn(ctx, ui), k, { ...base, t: r }); ctx.restore(); stage.push({ sl, k, d, R, g }); return; }
+    const since = d - P_TOT, glow = (isRare(sl.id) ? 0.5 : 0.28) + 0.16 * Math.sin(r * 3 + k) + Math.max(0, 0.6 - since * 1.5), flash = Math.max(0, 0.4 - since * 3);
+    const res = drawOfferWide(ctx, save, sl.id, R.x, R.y, R.w, R.h, wideBtn, k, { ...base, t: r, glow, shine: since / SHINE, flash });
+    if (res) out.buy = sl.id;
+  });
+  // --- сцена: карточка раскрывается по центру, крупно ---
+  if (stage.length) {
+    let da = 0; for (const c of stage) da = Math.max(da, c.g > 0 ? 1 - easeOutCubic(c.g) : Math.min(1, c.d / 0.12));
+    ctx.fillStyle = `rgba(10,3,14,${0.62 * da})`; ctx.fillRect(0, 0, VW, VH);
+    for (const { sl, k, d, R, g } of stage) {
+      const W = CARD_W, H = CARD_H, rare = isRare(sl.id);
+      if (!sl.f1) { sl.f1 = true; if (d < 0.15) sfx('whoosh', { pitch: 1.1 + k * 0.12, vol: 0.7 }); }
+      if (!sl.f2 && d >= P_FLY + P_FLIP / 2) { sl.f2 = true; if (d - P_FLY - P_FLIP / 2 < 0.2) { burst(rv, st.cx, st.cy, sl.id); sfx('pop', { pitch: 1 + k * 0.15 }); if (rare) sfx('ach', { pitch: 1.25 }); } }
+      const fly = Math.min(1, d / P_FLY), fl = Math.min(1, Math.max(0, (d - P_FLY) / P_FLIP)), hold = d - P_FLY - P_FLIP;
+      if (rare && hold > 0 && g === 0) rays(ctx, st.cx, st.cy, r, Math.min(1, hold * 4));
+      let px = st.cx, py = st.cy, sc = st.sc, rot = 0, a = 1, sx = 1;
+      if (fly < 1) { const e = easeOutBack(fly); py = st.cy + (1 - e) * VH * 0.55; rot = (1 - e) * (k % 2 ? 0.3 : -0.3); sc = st.sc * (0.55 + 0.45 * e); }
+      else if (fl < 1) sx = Math.max(0.02, Math.abs(Math.cos(fl * Math.PI)));
+      else if (g === 0) sc = st.sc * (1 + 0.02 * Math.sin(r * 8));
+      if (g > 0) { const e = g < 0.5 ? 2 * g * g : 1 - (-2 * g + 2) ** 2 / 2, tgt = R.h / H * 0.78; px = st.cx + (R.x + R.w / 2 - st.cx) * e; py = st.cy + (R.y + R.h / 2 - st.cy) * e; sc = st.sc + (tgt - st.sc) * e; a = 1 - easeOutCubic(g); }
+      ctx.save(); ctx.globalAlpha *= a; ctx.translate(px, py); ctx.rotate(rot); ctx.scale(sc * sx, sc);
+      if (fl < 0.5 && g === 0) drawOfferBack(ctx, sl.id, -W / 2, -H / 2, W, H, r);
+      else drawOfferCard(ctx, save, sl.id, -W / 2, -H / 2, W, H, fakeBtn(ctx, ui), k, { t: r, glow: 0.5 + 0.2 * Math.sin(r * 5), flash: Math.max(0, 0.5 - (hold + P_FLIP) * 3) * (fl >= 0.5 ? 1 : 0) });
+      ctx.restore();
+    }
+    // реплика Поппи над сценой (пока идёт раскрытие)
+    const qa = Math.min(1, Math.max(0, (r - 0.25) / 0.2)) * (1 - Math.min(1, Math.max(0, (r - (revealEnd(rv) - 0.4)) / 0.3)));
+    if (qa > 0 && rv.quip) {
+      ctx.save(); ctx.globalAlpha = qa * da; ctx.font = F(800, fs, 'italic ');
+      const qw = Math.min(ctx.measureText(rv.quip).width + 26, VW - 32), qx = VW / 2 - qw / 2, qy = st.cy - CARD_H * st.sc / 2 - 56;
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(qx, qy, qw, 36, 14); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(VW / 2 - 10, qy + 34); ctx.lineTo(VW / 2, qy + 48); ctx.lineTo(VW / 2 + 10, qy + 34); ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.beginPath(); ctx.roundRect(qx, qy, qw, 36, 14); ctx.stroke();
+      ctx.fillStyle = INK; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; fitFont(ctx, rv.quip, 800, fs, qw - 24, 'italic '); ctx.fillText(rv.quip, VW / 2, qy + 19);
+      ctx.restore();
+    }
+  }
+  drawFx(ctx, rv);
+  return out;
+}
+// Банка конфет и счётчик «в копилке» — закреплены сверху
+export function drawJarCounterP(ctx, rv, save, x, y, fs) {
+  const k = Math.min(1, Math.max(0, (rv.r - 0.04) / COUNT)), e = easeOutCubic(k);
+  const gk = rv.gift ? easeOutCubic(Math.min(1, Math.max(0, (rv.r - GIFT_T) / 0.4))) : 1;
+  const target = save.candies - Math.round(rv.earned * (1 - e)) - (rv.gift ? Math.round(rv.gift.n * (1 - gk)) : 0);
+  if (rv.jarDisp == null || k < 1) rv.jarDisp = target; else rv.jarDisp += (target - rv.jarDisp) * Math.min(1, (rv.dt || 0.016) * 9);
+  const pulse = Math.max(0, 1 - (rv.r - rv.jarPulse) / 0.18);
+  ctx.save(); ctx.translate(x, y); ctx.scale(1.25, 1.25); drawCandyJar(ctx, 0, 0, Math.min(1, save.candies / 400), pulse); ctx.restore();
+  ctx.save(); ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = INK;
+  const s = String(Math.round(rv.jarDisp)); ctx.font = F(900, fs + 11); ctx.strokeText(s, x - 30, y - 4); ctx.fillStyle = C.gold; ctx.fillText(s, x - 30, y - 4);
+  ctx.font = F(800, fs - 1); ctx.lineWidth = 4; ctx.strokeText('в копилке', x - 30, y + 20); ctx.fillStyle = 'rgba(255,230,239,0.9)'; ctx.fillText('в копилке', x - 30, y + 20);
+  ctx.restore();
+}
+// Строка «+N конфет за забег» с отсчётом
+export function drawEarnedRowP(ctx, rv, x, y, fs) {
+  const k = Math.min(1, Math.max(0, (rv.r - 0.04) / COUNT)), e = easeOutCubic(k), shown = Math.round(rv.earned * e);
+  ctx.save(); ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  const pop = k < 1 ? 1 + 0.08 * Math.sin(rv.r * 40) : 1;
+  drawCandy(ctx, x + 14, y, 1.7);
+  ctx.save(); ctx.translate(x + 40, y); ctx.scale(pop, pop);
+  ctx.font = F(900, fs + 13); ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = INK; ctx.strokeText(`+${shown}`, 0, 1); ctx.fillStyle = C.gold; ctx.fillText(`+${shown}`, 0, 1);
+  const tw = ctx.measureText(`+${rv.earned}`).width; ctx.restore();
+  ctx.font = F(800, fs + 2); ctx.fillStyle = '#ffe6ef'; ctx.fillText('конфет за забег', x + 50 + tw, y + 2);
   ctx.restore();
 }

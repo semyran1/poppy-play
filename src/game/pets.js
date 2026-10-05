@@ -140,13 +140,13 @@ export function drawPet(ctx, P, id, h = PET_NOM, o = {}) {
   if (P.bubble && !o.noBubble) drawPetBubble(ctx, P, h);
 }
 
-export function drawPetBubble(ctx, P, h) {
+export function drawPetBubble(ctx, P, h, maxX = 954) {   // maxX — правый край для реплики (бой: view.W − 6)
   const b = P.bubble, L = b.life, a = b.t < 0.15 ? b.t / 0.15 : b.t > L - 0.25 ? (L - b.t) / 0.25 : 1;
   const pop = b.t < 0.15 ? 0.3 + 0.8 * (b.t / 0.15) : b.t < 0.22 ? 1.1 - (b.t - 0.15) / 0.07 * 0.1 : 1;
   const k = Math.max(h / 50, 1), fs = Math.round(12 * Math.min(k, 1.5));
   ctx.save(); ctx.globalAlpha = Math.max(0, Math.min(1, a));
   ctx.font = `900 ${fs}px Nunito, sans-serif`;
-  const w = ctx.measureText(b.s).width + 18, bx = Math.max(w / 2 + 6, Math.min(954 - w / 2, P.x)), by = P.y - h * 0.62 - 22 * Math.min(k, 1.5) + (h < 50 ? 6 : 0);
+  const w = ctx.measureText(b.s).width + 18, bx = Math.max(w / 2 + 6, Math.min(maxX - w / 2, P.x)), by = P.y - h * 0.62 - 22 * Math.min(k, 1.5) + (h < 50 ? 6 : 0);
   ctx.translate(bx, by + 12); ctx.scale(pop, pop); ctx.translate(-bx, -by - 12);
   ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(bx - w / 2, by - 12, w, 24, 11); ctx.fill();
   ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(42,10,20,0.55)'; ctx.stroke();

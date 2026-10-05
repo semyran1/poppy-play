@@ -8,7 +8,8 @@
 // капля пота и «венка», сплит-экран.
 import { drawSceneBg, drawActor, drawPortrait, preload, loaded } from '../art/scenes.js';
 import { drawVignette } from '../art/backgrounds.js';
-import { text, FONT } from './ui.js';
+import { text, wrap, FONT } from './ui.js';
+import { view as VP } from '../engine/core.js';
 import { sfx, playMusic } from '../engine/audio.js';
 import { drawHeroine } from '../art/heroine.js';
 import { drawHeroinePortrait, loadHeroineKey, drawHeroineKey } from '../art/heroineVec.js';
@@ -26,6 +27,10 @@ const P = {
   paper: '#f3e2c0', hi: '#fff6e2', sh: '#d8bf92', sepia: '#a9865a', ink: '#3a1a10', red: '#c8243a', redDk: '#8e1626',
   pink: '#f08aa4', gold: '#eaa83a', cool: '#a8d8ea', choc: '#6b3a22', film: '#120b07',
 };
+// Область рисования сцены. Ландшафт — дизайн-рамка 960×540 (как раньше); портрет (view.portrait) — окно кино или весь вид, см. «Портретная раскладка» ниже.
+// W×H (выше) — размер МИРА (фоны 960×540); SW×SH — размер того, во что сейчас рисуют экранные слои (реакции, вспышки, ракорд…), SCX/SCY — центр камеры на нём.
+let SW = 960, SH = 540, SCX = 480, SCY = 270, TOPPAD = LB + 30, PORT = false;
+const area = (w, h, cx = w / 2, cy = h / 2, top = LB + 30) => { SW = w; SH = h; SCX = cx; SCY = cy; TOPPAD = top; };
 const hash = n => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
 const hex = c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16));
 const mix = (a, b, k) => { const A = hex(a), B = hex(b); return `rgb(${A.map((v, n) => Math.round(v + (B[n] - v) * k)).join(',')})`; };
@@ -290,6 +295,24 @@ const SB = { x: 826, y: 490, w: 114, h: 36 };          // «Пропустить
 const COLD = { lead: 0.9, num: 0.5, flash: 2.4, reveal: 2.5, dur: 3.25 };
 const CRUSH_K = 1.5;   // Краш и Руда рядом с новой героиней: её рост на экране ≈ 1,45 h (лист персонажа), их вектор — во весь рост h
 
+// ---------- Портретная раскладка (view.portrait: W = 540…630, H = 840…1260) ----------
+// Сверху узкая полоса: подпись главы и «Пропустить» (≥ 44 CSS px). Под ней «окно кино» ≈ 58–60 % высоты: тот же кадр, что в ландшафте (камера ведётся в ландшафтных
+// координатах, по вертикали план тот же: zoom·K, K = высота окна / 432 — как у кадра 960×432 между чёрными полосами), по горизонтали окно узкое → portraitCam(). Внизу плашка диалога:
+// портреты по краям верхнего ряда, имя рядом с говорящим, крупный текст (22–24 лог. px ≈ 15–17 CSS px на телефоне). Считается заново на каждый кадр: поворот и смена размера — на лету.
+export function portLay(V = VP) {
+  const sc = V.scale, sf = V.safe, side = 12;
+  const skH = clamp(Math.ceil(46 / sc), 40, 68), skW = clamp(Math.ceil(110 / sc), 150, 210);
+  const top = sf.t + skH + 16, bot = sf.b + 14, free = V.H - top - bot;
+  let wh = Math.min(Math.round(free * 0.66), Math.round(432 * 1.7)), ph = clamp(free - wh - 12, 0, 420);
+  if (ph < 250) { wh -= 250 - ph; ph = 250; }
+  const py = V.H - bot - ph, ps = clamp(Math.round(ph * 0.4), 96, 150), font = ph >= 330 ? 26 : ph >= 285 ? 24 : 22, lh = Math.round(font * 1.36);
+  const textTop = py + 14 + ps + 8, textH = ph - (textTop - py) - 32;
+  return {
+    ww: V.W, wy: top, wh, K: wh / 432, px: side + sf.l, pw: V.W - 2 * side - sf.l - sf.r, py, ph, ps, font, lh, textTop, textH, maxLines: Math.max(2, Math.floor(textH / lh)),
+    skip: { x: V.W - sf.r - side - skW, y: sf.t + 8, w: skW, h: skH },
+  };
+}
+
 export function createStory(app, key, onDone) {
   const inp = app.inp;
   const outfit = () => app.save.outfit || 'lara';
@@ -301,6 +324,7 @@ export function createStory(app, key, onDone) {
   let i, t, stepT, st, R, phase, closeT, outroT, outroDur, outroKind, lbT, panelK, skipK, armed, done;
   let tw, pushT, pushDur, pushAmt, tilt, tiltTarget, trauma, flash, lightning, pulse, dark, darkTarget;
   let loadWait = 0, prevWho, whoT, face, faceT, parts, queue, ins, irisT, lastClack, coldN, view, burnAt, nextBolt;
+  let insK = 0, insSide = 1, pBase = null;   // портрет: «карточка-вставка» уводит говорящего в сторону; pBase — последняя портретная камера (до наезда и тряски)
   // реакции-«дорамы»
   let evq, romanceK, romanceT, romanceOn, gloomK, gloomT, gloomOn, shock, stamps, split, splitK, splitOn, poofDone, BASE, shk;
 
@@ -343,10 +367,53 @@ export function createStory(app, key, onDone) {
       delay = c.late ? (s?.beat || 0) : (c.delay || 0); whip = !!c.whip;
     } else if (reverseTo) { to = resolveCam({ on: reverseTo, zoom: 1.5 }, from); dur = 0.35; }   // восьмёрка
     else if (from.z > 2.3) { to = clampCam({ x: 480, y: 330, z: 1 }); dur = 0; }                   // наезд упёрся — склейка на общий
-    tw = { from, to, t: -delay, dur, ease, whip };
+    // портрет: цель камеры (кого ведём) и откуда стартует портретная камера (непрерывно с предыдущего кадра)
+    const on = c ? (c.on ?? (c.x !== undefined || c.y !== undefined ? null : tw.on)) : reverseTo ?? (from.z > 2.3 ? null : tw.on);
+    const pFrom = pBase ? { x: pBase.x, y: pBase.y, z: pBase.z * pushF(), mode: pBase.mode } : null;
+    tw = { from, to, t: -delay, dur, ease, whip, on, dx: c?.dx || 0, pFrom };
     pushT = 0;
   }
-  const toScreen = (p, v) => ({ x: (p.x - v.x) * v.z + 480, y: (p.y - v.y) * v.z + 270 });
+  const toScreen = (p, v) => ({ x: (p.x - v.x) * v.z + SCX, y: (p.y - v.y) * v.z + SCY });
+
+  // --- портретная камера ---
+  // Камера story ведётся в ландшафтных координатах (tw: from → to) и не знает о раскладке. В портрете окно узкое (≈ 0,39 ширины кадра), поэтому
+  // portraitCam(L) пересчитывает цель: тот же вертикальный план (zoom·K), по горизонтали — на том, кого ведёт камера (tw.on): один герой — на нём;
+  // двое ('both') — общий вид, а если пара не помещается в 540 даже при отъезде до «обложки» фона — камера держит говорящего. Явная панорама (x, y) сохраняется, но говорящий
+  // всегда остаётся в кадре. Пока на экране вставка-карточка, говорящий уезжает в сторону, противоположную карточке (insK).
+  const speakerKey = () => { const k = SPEAKERS[R.s.who]?.key; return k && st[k] ? k : null; };
+  function spanOf(name) {   // горизонтальный след героя в мире: центр и полуширина
+    const a = name === 'poppy' ? st.poppy : name === 'crush' ? st.crush : name === 'ruda' ? st.ruda : null;
+    if (!a) return null;
+    return { x: a.x, hw: name === 'poppy' ? a.h * (hero() === 'classic' ? 0.3 : 0.4) : a.h * AK() * 0.34 };
+  }
+  function portraitTarget(L) {
+    const to = tw.to, zmin = Math.max(L.wh / 540, L.ww / 960);
+    let zp = Math.max(to.z * L.K, zmin), cx = to.x, cy = to.y;
+    const off = insK * insSide * L.ww * 0.2;   // вставка-карточка на экране: говорящий уходит в противоположную карточке сторону (px окна)
+    const names = tw.on === 'both' ? ['poppy', otherKey()] : tw.on ? [tw.on] : [], spans = names.map(spanOf).filter(Boolean);
+    const spk = spanOf(speakerKey()), pad = 26;
+    if (spans.length) {
+      const f = faceOf(tw.on); if (f) cx = f.x + tw.dx + off / zp;
+      if (spans.length > 1) {   // двое: помещаются? иначе отъезд, иначе говорящий
+        const l = Math.min(...spans.map(s => s.x - s.hw)), r = Math.max(...spans.map(s => s.x + s.hw));
+        if ((r - l) * zp + 2 * pad > L.ww) {
+          const zfit = (L.ww - 2 * pad) / (r - l);
+          if (zfit >= zmin) { zp = zfit; cx = (l + r) / 2 + off / zp; }
+          else if (spk && spans.some(s => s.x === spk.x)) { const fs = faceOf(speakerKey()); if (fs) cx = fs.x + off / zp; }
+        } else { const vw = L.ww / zp, lo = r + pad / zp - vw / 2, hi = l - pad / zp + vw / 2; cx = lo <= hi ? clamp(cx, lo, hi) : (l + r) / 2; }
+      }
+    } else cx += off / zp;
+    if (spk) {   // говорящий всегда в кадре (если помещается целиком; крупный план лица — как есть)
+      const vw = L.ww / zp, lo = spk.x + spk.hw + pad / zp - vw / 2, hi = spk.x - spk.hw - pad / zp + vw / 2;
+      if (lo <= hi) cx = clamp(cx, lo, hi);
+    }
+    const hw = L.ww / 2 / zp, hh = L.wh / 2 / zp;
+    return { x: hw >= 480 ? 480 : clamp(cx, hw, W - hw), y: hh >= 270 ? 270 : clamp(cy, hh, H - hh), z: zp, mode: 'p' };
+  }
+  function portraitCam(L) {   // базовая портретная камера: мягкий переход от прежней к цели, тем же кривым, что и ландшафтная
+    const tgt = portraitTarget(L), k = tw.dur <= 0 ? (tw.t >= 0 ? 1 : 0) : clamp(tw.t / tw.dur, 0, 1), e = (EASE[tw.ease] || EASE.inOutSine)(k), f = tw.pFrom && tw.pFrom.mode === 'p' ? tw.pFrom : tgt;
+    return pBase = { x: lerp(f.x, tgt.x, e), y: lerp(f.y, tgt.y, e), z: lerp(f.z, tgt.z, e), mode: 'p' };
+  }
 
   // --- звук ---
   function sting(name) {
@@ -393,8 +460,15 @@ export function createStory(app, key, onDone) {
   }
   function showInsert(spec) {
     const o = typeof spec === 'string' ? { k: spec } : spec, sp = SPEAKERS[R.s.who], f = faceOf(sp ? sp.key : 'poppy') || faceOf('poppy');
-    const sx = f && view ? (f.x - view.x) * view.z + 480 : 300, left = sx > 480;
-    ins = { k: o.k, t: 0, dur: o.dur ?? 2.0, x: left ? 250 : 712, y: 200, rot: left ? -0.06 : 0.06 };
+    if (VP.portrait) {   // портрет: карточка с той стороны окна, где стоит собеседник; говорящего камера уводит на противоположную (insK)
+      const L = portLay(), me = sp ? sp.key : 'poppy', ot = me === 'poppy' ? otherKey() : 'poppy', a = st[me], b = ot && st[ot];
+      insSide = b && a ? (b.x >= a.x ? 1 : -1) : me === 'poppy' ? 1 : -1;
+      const s = 1.12, cw = CARD.w * s;
+      ins = { k: o.k, t: 0, dur: o.dur ?? 2.0, x: L.ww / 2 + insSide * (L.ww / 2 - cw / 2 - 8), y: L.wh * 0.31, rot: insSide < 0 ? -0.06 : 0.06, s };
+    } else {
+      const sx = f && view ? (f.x - view.x) * view.z + 480 : 300, left = sx > 480;
+      ins = { k: o.k, t: 0, dur: o.dur ?? 2.0, x: left ? 250 : 712, y: 200, rot: left ? -0.06 : 0.06 };
+    }
     sting(o.sfx || 'pop');
   }
   function startText() {
@@ -446,7 +520,8 @@ export function createStory(app, key, onDone) {
     else apply(i + 1);
   }
   function finish() { if (done) return; done = true; inp.endStep(); onDone(); }
-  const inBtn = (x, y) => x > SB.x && x < SB.x + SB.w && y > SB.y && y < SB.y + SB.h;
+  const skipRect = () => VP.portrait ? portLay().skip : SB;
+  const inBtn = (x, y) => { const b = skipRect(), m = VP.portrait ? 8 : 0; return x > b.x - m && x < b.x + b.w + m && y > b.y - m && y < b.y + b.h + m; };   // на тач-экране — с запасом
 
   // --- атмосфера: частицы ---
   function ambient(dt) {
@@ -468,6 +543,7 @@ export function createStory(app, key, onDone) {
   }
 
   const api = {
+    portraitLayout: true,   // в портрете сцена сама рисует раскладку на полном виде (см. main.js, usesFullView)
     enter() {
       steps = (STORY[key] || []).filter(s => okIf(s.if));
       if (!steps.length) steps = [{ who: null, s: '', auto: 0 }];
@@ -475,7 +551,7 @@ export function createStory(app, key, onDone) {
       lbT = 0; panelK = 0; skipK = 0; armed = false; trauma = 0; tilt = 0; flash = 0; lightning = 0; pulse = 0; dark = 0;
       prevWho = null; whoT = 9; face = null; faceT = 9; lastClack = 0; coldN = 0; burnAt = { x: 610, y: 230 }; nextBolt = 6;
       evq = []; romanceK = 0; romanceT = 0; gloomK = 0; gloomT = 0; shock = null; stamps = []; split = null; splitK = 0; splitOn = false; shk = { x: 0, y: 0, r: 0 };
-      tw = { from: { x: 480, y: 270, z: 1 }, to: { x: 480, y: 270, z: 1 }, t: 0, dur: 0, ease: 'linear' }; pushT = 0; pushAmt = 0; pushDur = 1;
+      tw = { from: { x: 480, y: 270, z: 1 }, to: { x: 480, y: 270, z: 1 }, t: 0, dur: 0, ease: 'linear', on: null, dx: 0, pFrom: null }; insK = 0; insSide = 1; pBase = null; pushT = 0; pushAmt = 0; pushDur = 1;
       apply(0); playMusic('calm'); preload(storyAssets(key)); loadHeroineKey(outfit());
     },
     // отладка и проверки: перейти к шагу k (window.__app.cur().goto(k))
@@ -486,6 +562,13 @@ export function createStory(app, key, onDone) {
     },
     get stepIndex() { return i; },
     get stepCount() { return steps.length; },
+    // проверки: раскладка текущего кадра (портрет — окно, плашка, «Пропустить» в логических координатах вида), строки текста, ввод
+    layoutInfo() {
+      const L = VP.portrait ? portLay() : null, ch = R.L, sr = skipRect();
+      return { portrait: VP.portrait, scale: VP.scale, dx: VP.dx, dy: VP.dy, safe: { ...VP.safe }, win: L && { x: 0, y: L.wy, w: L.ww, h: L.wh }, panel: L && { x: L.px, y: L.py, w: L.pw, h: L.ph },
+        cam: view && { x: +view.x.toFixed(1), y: +view.y.toFixed(1), z: +view.z.toFixed(3), tw: { t: +tw.t.toFixed(2), dur: tw.dur, on: tw.on } },
+        skip: { x: sr.x, y: sr.y, w: sr.w, h: sr.h }, lines: ch.lines || 0, maxLines: L ? L.maxLines : 4, fits: !L || (ch.lines || 0) <= L.maxLines, typed: R.typed, skipK, step: i };
+    },
     update(dt) {
       if (done) return;
       inp.poll(); t += dt;
@@ -510,6 +593,7 @@ export function createStory(app, key, onDone) {
       if (shock) { shock.t += dt; if (shock.t > 1.3) shock = null; }
       for (const m of stamps) m.t += dt;
       if (ins) { ins.t += dt; if (ins.t > ins.dur + 0.4) ins = null; }
+      insK += ((ins && ins.t < ins.dur + 0.1 ? 1 : 0) - insK) * Math.min(1, dt * 4);
       ambient(dt);
       if (phase === 'outro') { outroT += dt; inp.endStep(); if (outroT >= outroDur) finish(); return; }
       if (phase === 'closing') { closeT += dt; if (closeT >= 0.42) { phase = 'play'; apply(i + 1); } inp.endStep(); return; }
@@ -554,6 +638,8 @@ export function createStory(app, key, onDone) {
     },
     draw(ctx) {
       const s = R.s;
+      if (VP.portrait) return drawPort(ctx, s);
+      PORT = false; pBase = null; area(960, 540);   // ландшафт: дизайн-рамка 960×540, как раньше
       // ---- мир через камеру ----
       const c = camNow(), rad = tilt * Math.PI / 180, lbE = EASE.inOutCubic(lbT);
       const z = c.z * pushF() * (1 + Math.abs(Math.sin(rad)) * 0.8);
@@ -609,27 +695,98 @@ export function createStory(app, key, onDone) {
   return api;
 
   // ---------- проход мира: фон → «задник» реакций → персонажи → частицы ----------
-  function worldPass(ctx, v, sh, ox, panel) {
+  function worldPass(ctx, v, sh, ox, panel, oy = 0) {
     ctx.save();
-    ctx.translate(480 + sh.x + ox, 270 + sh.y); ctx.rotate(sh.r); ctx.scale(v.z, v.z); ctx.translate(-v.x, -v.y);
+    ctx.translate(SCX + sh.x + ox, SCY + sh.y + oy); ctx.rotate(sh.r); ctx.scale(v.z, v.z); ctx.translate(-v.x, -v.y);
     if (!drawSceneBg(ctx, st.bg)) { ctx.fillStyle = '#0a0408'; ctx.fillRect(0, 0, W, H); }
     drawBack(ctx, st.bg, t);
-    ctx.save(); ctx.setTransform(BASE); if (ox) ctx.translate(ox, 0); drawFxBack(ctx, v, panel); ctx.restore();
+    ctx.save(); ctx.setTransform(BASE); if (ox || oy) ctx.translate(ox, oy); drawFxBack(ctx, v, panel); ctx.restore();
     drawActors(ctx, v);
     drawParts(ctx, parts, t);
-    if (st.title) drawTitleCard(ctx, stepT);
+    if (st.title && !PORT) drawTitleCard(ctx, stepT);
     ctx.restore();
+  }
+  // ---------- портретный кадр: полоса сверху · окно кино · плашка диалога (всё в координатах вида; окно — со своим началом координат и обрезкой) ----------
+  function drawPort(ctx, s) {
+    PORT = true;
+    const V = VP, L = portLay(), rad = tilt * Math.PI / 180, tr = trauma * trauma, lbE = EASE.inOutCubic(lbT);
+    const base = portraitCam(L);
+    view = { x: base.x, y: base.y, z: base.z * pushF() * (1 + Math.abs(Math.sin(rad))) };
+    shk = { x: (Math.sin(t * 47.3) + Math.sin(t * 31.7 + 1)) * tr * 9, y: (Math.sin(t * 39.1 + 2) + Math.sin(t * 23.3)) * tr * 7, r: rad + Math.sin(t * 29) * tr * 0.025 };
+    ctx.fillStyle = LB_COL; ctx.fillRect(0, 0, V.W, V.H);
+    // ---- окно кино ----
+    ctx.save(); ctx.translate(0, L.wy); ctx.beginPath(); ctx.rect(0, 0, L.ww, L.wh); ctx.clip();
+    area(L.ww, L.wh, L.ww / 2, L.wh / 2, 28);
+    BASE = ctx.getTransform();
+    ctx.fillStyle = '#0a0408'; ctx.fillRect(0, 0, SW, SH);
+    worldPass(ctx, view, shk, 0, null);
+    if (split && splitK > 0.001) drawSplit(ctx);
+    if (st.bg && !loaded(st.bg)) text(ctx, 'загрузка…', SW / 2, SH / 2, { size: 20, color: '#ffd0dc' });
+    if (dark > 0.01) { ctx.fillStyle = `rgba(8,2,10,${dark})`; ctx.fillRect(0, 0, SW, SH); }
+    drawVignetteBox(ctx);
+    if (pulse > 0) {
+      const a = pulse * (0.35 + 0.25 * Math.sin(t * 7));
+      const g = ctx.createRadialGradient(SW / 2, SH / 2, 160, SW / 2, SH / 2, 560); g.addColorStop(0, 'rgba(160,0,20,0)'); g.addColorStop(1, `rgba(170,0,24,${a})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
+    }
+    if (lightning > 0) { const a = lightning * (0.55 + 0.45 * Math.sin(lightning * 40)); ctx.fillStyle = `rgba(210,225,255,${Math.max(0, a) * 0.55})`; ctx.fillRect(0, 0, SW, SH); }
+    drawFxFront(ctx);
+    if (tw.whip && tw.t >= 0 && tw.t < tw.dur + 0.08) drawWhip(ctx, clamp(tw.t / (tw.dur + 0.08), 0, 1));
+    if (ins) drawInsert(ctx, ins);
+    if (st.plate) drawPlate(ctx, st.plate, stepT);
+    if (st.title) drawTitleCardP(ctx, stepT);
+    if (flash > 0) { ctx.fillStyle = `rgba(255,246,224,${flash})`; ctx.fillRect(0, 0, SW, SH); }
+    const faceP = s.cold ? toScreen(faceOf('poppy') || { x: 480, y: 270 }, view) : null;   // центр раскрытия ракорда (в координатах окна)
+    ctx.restore();
+    // ---- верхняя полоса: подпись главы ----
+    area(V.W, V.H);
+    ctx.globalAlpha = lbE * 0.6;
+    text(ctx, CAPTION[key] || '', V.safe.l + 16, L.skip.y + L.skip.h / 2, { size: 17, align: 'left', color: '#ffd0dc', outline: false, weight: 900 });
+    ctx.globalAlpha = 1;
+    if (st.title && stepT > 1.2) { ctx.globalAlpha = clamp((stepT - 1.2) / 0.6, 0, 1); text(ctx, 'Глава 2 «Улица»', V.W / 2, L.py + L.ph / 2, { size: 28, color: '#ffd0dc' }); ctx.globalAlpha = 1; }
+    // ---- плашка диалога ----
+    currentOutfit = outfit(); currentHero = hero();
+    if (panelK > 0 && s.who) drawDialogP(ctx, s.who, { k: EASE.outCubic(panelK), R, st, whoT, face, faceT, t }, L);
+    // ---- ракорд и финальная карточка — на весь вид ----
+    if (s.cold && faceP) { const px = faceP.x, py = faceP.y + L.wy; drawCold(ctx, stepT, { x: px, y: py }, 48, Math.hypot(Math.max(px, V.W - px), Math.max(py, V.H - py)) + 30); }
+    if (st.card) drawEndCard(ctx, stepT, 48);
+    // ---- переходы: диафрагма и затемнение на весь вид, центр — в окне ----
+    const icx = V.W / 2, icy = L.wy + L.wh / 2, R0 = Math.hypot(Math.max(icx, V.W - icx), Math.max(icy, V.H - icy)) + 30;
+    if (phase === 'closing') drawIris(ctx, icx, icy, (1 - EASE.inCubic(clamp(closeT / 0.36, 0, 1))) * R0);
+    else if (irisT !== null && irisT < 0.7) drawIris(ctx, icx, icy, EASE.outCubic(clamp((irisT - 0.12) / 0.5, 0, 1)) * R0);
+    if (phase === 'outro') {
+      const k = clamp(outroT / outroDur, 0, 1);
+      if (outroKind === 'burn') drawBurn(ctx, V.W * 0.62, L.wy + L.wh * 0.4, k, t);
+      else { ctx.fillStyle = `rgba(14,6,18,${EASE.inQuad(k)})`; ctx.fillRect(0, 0, V.W, V.H); }
+    }
+    drawSkip(ctx, skipK, inBtn(inp.pointer.x, inp.pointer.y), armed || skipK > 0, L.skip, 19);
   }
   // Сплит-экран: два крупных плана, косой стык с кремовой кромкой; панели въезжают с боков
   function splitView(name, side) {
     const f = faceOf(name); if (!f) return null;
+    if (PORT) {   // портрет: две панели друг над другом, лицо — в центре своей панели
+      const z = (split.zoom || 2.0) * 1.15, pcy = SH * (side < 0 ? 0.26 : 0.74);
+      return { x: f.x, y: clamp(f.y + (SH / 2 - pcy) / z, SH / 2 / z, H - SH / 2 / z), z };
+    }
     const z = split.zoom || 2.0;
     return { x: f.x - side * 235 / z, y: clamp(f.y + 40 / z, 270 / z, H - 270 / z), z };
   }
   function drawSplit(ctx) {
-    const e = EASE.outCubic(splitK), slide = (1 - e) * 620;
+    const e = EASE.outCubic(splitK), slide = (1 - e) * (PORT ? SH : 620);
     for (const [side, name] of [[-1, split.a || 'poppy'], [1, split.b || otherKey()]]) {
       const v = name && splitView(name, side); if (!v) continue;
+      if (PORT) {   // косой стык по горизонтали: верхняя панель въезжает сверху, нижняя — снизу
+        const oy = side * slide, my = SH / 2, d = 36;
+        ctx.save(); ctx.beginPath();
+        if (side < 0) { ctx.moveTo(-10, oy - 10); ctx.lineTo(SW + 10, oy - 10); ctx.lineTo(SW + 10, my - d + oy); ctx.lineTo(-10, my + d + oy); }
+        else { ctx.moveTo(-10, my + d + oy); ctx.lineTo(SW + 10, my - d + oy); ctx.lineTo(SW + 10, SH + 10 + oy); ctx.lineTo(-10, SH + 10 + oy); }
+        ctx.closePath(); ctx.clip();
+        worldPass(ctx, v, { x: 0, y: 0, r: 0 }, 0, name, oy);
+        ctx.restore();
+        ctx.save(); ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(-6, my + d + 3 + oy); ctx.lineTo(SW + 6, my - d - 3 + oy);
+        ctx.strokeStyle = P.ink; ctx.lineWidth = 15; ctx.stroke(); ctx.strokeStyle = P.paper; ctx.lineWidth = 7; ctx.stroke(); ctx.restore();
+        continue;
+      }
       const ox = side * slide;
       ctx.save(); ctx.beginPath();
       if (side < 0) { ctx.moveTo(ox - 10, 0); ctx.lineTo(530 + ox, 0); ctx.lineTo(430 + ox, H); ctx.lineTo(ox - 10, H); }
@@ -655,7 +812,7 @@ export function createStory(app, key, onDone) {
     const p = toScreen(f, view); return { x: p.x + shk.x, y: p.y + shk.y, u: view.z * unitOf(on) };
   }
   function drawFxBack(ctx, v, panel) {
-    const at = on => { const f = faceOf(panel || on); return f ? toScreen(f, v) : { x: 480, y: 240 }; };
+    const at = on => { const f = faceOf(panel || on); return f ? toScreen(f, v) : { x: SCX, y: SCY - 30 }; };
     if (romanceK > 0.01) drawRomanceBack(ctx, at(romanceOn), romanceK, t);
     if (gloomK > 0.01 && (!panel || panel === gloomOn)) drawGloomBack(ctx, at(gloomOn), gloomK, v.z * unitOf(gloomOn));
     if (shock && (!panel || panel === shock.on)) drawShockBack(ctx, at(shock.on), shock, t);
@@ -831,10 +988,10 @@ function drawShockBack(ctx, c, S, t) {   // шок: вспышка-градие�
     const g = ctx.createRadialGradient(c.x, c.y, 20, c.x, c.y, 640);
     g.addColorStop(0, `rgba(255,246,226,${env})`); g.addColorStop(0.28, `rgba(243,190,160,${env * 0.95})`);
     g.addColorStop(0.62, `rgba(200,36,58,${env * 0.9})`); g.addColorStop(1, `rgba(58,26,16,${env * 0.95})`);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
   } else {
     const g = ctx.createRadialGradient(c.x, c.y, 60, c.x, c.y, 600); g.addColorStop(0, 'rgba(243,226,192,0)'); g.addColorStop(1, `rgba(200,36,58,${env * 0.35})`);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
   }
   const fr = Math.floor(t * 20), n = 68, r0 = S.kind === 'shock' ? 120 : 160;
   ctx.fillStyle = `rgba(58,26,16,${(S.kind === 'shock' ? 0.85 : 0.6) * env})`; ctx.beginPath();
@@ -849,8 +1006,8 @@ function drawShockBack(ctx, c, S, t) {   // шок: вспышка-градие�
 }
 function drawGloomBack(ctx, c, k, u) {   // уныние: синий тон и вертикальные «линии уныния» за героем
   ctx.save();
-  ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(86,112,190,${k * 0.9})`; ctx.fillRect(0, 0, W, H);
-  ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = `rgba(12,18,44,${k * 0.3})`; ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(86,112,190,${k * 0.9})`; ctx.fillRect(0, 0, SW, SH);
+  ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = `rgba(12,18,44,${k * 0.3})`; ctx.fillRect(0, 0, SW, SH);
   ctx.strokeStyle = `rgba(16,22,58,${k * 0.6})`; ctx.lineCap = 'round';
   for (let n = 0; n < 24; n++) {
     const x = c.x + (n - 11.5) * 15 * Math.max(1, u) + hash(n * 3.3) * 8, len = (160 + hash(n * 9.1) * 180 - Math.abs(n - 11.5) * 8) * Math.max(1, u * 0.8);
@@ -861,20 +1018,20 @@ function drawGloomBack(ctx, c, k, u) {   // уныние: синий тон и �
 function drawGloomFront(ctx, f, k, t) {   // тучка над головой и дождик колонной, лёгкий синий тон и на герое
   const u = Math.max(0.7, f.u);
   ctx.save();
-  ctx.fillStyle = `rgba(40,64,140,${k * 0.15})`; ctx.fillRect(0, 0, W, H);
-  const cy = Math.max(LB + 30, f.y - 90 * u), cw = 50 * clamp(u, 0.8, 1.5);
+  ctx.fillStyle = `rgba(40,64,140,${k * 0.15})`; ctx.fillRect(0, 0, SW, SH);
+  const cy = Math.max(TOPPAD, f.y - 90 * u), cw = 50 * clamp(u, 0.8, 1.5);
   // дождь из тучки
   ctx.strokeStyle = `rgba(200,222,255,${0.75 * k})`; ctx.lineWidth = Math.max(1.5, 1.6 * u); ctx.lineCap = 'round';
   ctx.beginPath();
   for (let n = 0; n < 26; n++) {
-    const x0 = f.x - cw * 0.85 + hash(n * 2.3) * cw * 1.7, len = 16 * u, span = H - cy;
+    const x0 = f.x - cw * 0.85 + hash(n * 2.3) * cw * 1.7, len = 16 * u, span = SH - cy;
     const y = cy + ((hash(n * 5.9) * span + t * 620) % span), x = x0 - (y - cy) * 0.08;
     ctx.moveTo(x, y); ctx.lineTo(x - 2 * u, y + len);
   }
   ctx.stroke();
   // мелкий дождь по кадру
   ctx.strokeStyle = `rgba(190,210,250,${0.22 * k})`; ctx.lineWidth = 1; ctx.beginPath();
-  for (let n = 0; n < 50; n++) { const x = hash(n * 7.1) * W, y = (hash(n * 3.9) * H + t * 520) % H; ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 18); }
+  for (let n = 0; n < 50; n++) { const x = hash(n * 7.1) * SW, y = (hash(n * 3.9) * SH + t * 520) % SH; ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 18); }
   ctx.stroke();
   // тучка
   ctx.globalAlpha = k; ctx.translate(f.x, cy + Math.sin(t * 2) * 2 * u);
@@ -890,10 +1047,10 @@ function drawRomanceBack(ctx, c, k, t) {   // романтика: мягкий �
   ctx.save(); ctx.globalCompositeOperation = 'screen';
   const g = ctx.createRadialGradient(c.x, c.y, 10, c.x, c.y, 480);
   g.addColorStop(0, `rgba(255,200,212,${0.7 * k})`); g.addColorStop(0.5, `rgba(240,120,160,${0.28 * k})`); g.addColorStop(1, 'rgba(120,20,60,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
   for (let n = 0; n < 18; n++) {
-    const r = 14 + hash(n * 2.9) * 36, x = hash(n * 4.7) * W + Math.sin(t * 0.4 + n) * 30;
-    const y = ((hash(n * 8.3) * H - t * (8 + hash(n) * 14)) % H + H) % H, tw = 0.55 + 0.45 * Math.sin(t * 1.3 + n * 2.1);
+    const r = 14 + hash(n * 2.9) * 36, x = hash(n * 4.7) * SW + Math.sin(t * 0.4 + n) * 30;
+    const y = ((hash(n * 8.3) * SH - t * (8 + hash(n) * 14)) % SH + SH) % SH, tw = 0.55 + 0.45 * Math.sin(t * 1.3 + n * 2.1);
     const col = n % 3 === 0 ? '255,214,150' : n % 3 === 1 ? '255,160,190' : '255,236,220';
     const gg = ctx.createRadialGradient(x, y, r * 0.2, x, y, r); gg.addColorStop(0, `rgba(${col},${0.3 * k * tw})`); gg.addColorStop(0.82, `rgba(${col},${0.24 * k * tw})`); gg.addColorStop(1, `rgba(${col},0)`);
     ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
@@ -903,9 +1060,9 @@ function drawRomanceBack(ctx, c, k, t) {   // романтика: мягкий �
 function drawRomanceFront(ctx, faces, k, t) {   // лепестки, сердечки и искорки у лиц
   ctx.save(); ctx.globalAlpha = k;
   for (let n = 0; n < 16; n++) {
-    const sp = 34 + hash(n * 1.9) * 40, span = W + 200;
+    const sp = 34 + hash(n * 1.9) * 40, span = SW + 200;
     const x = (((hash(n * 6.1) * span - t * sp * 0.6) % span) + span) % span - 100 + Math.sin(t * 1.5 + n) * 18;
-    const y = ((hash(n * 3.7) * (H + 80) + t * sp) % (H + 80)) - 40;
+    const y = ((hash(n * 3.7) * (SH + 80) + t * sp) % (SH + 80)) - 40;
     ctx.save(); ctx.translate(x, y); ctx.rotate(t * 1.2 + n); ctx.scale(1, 0.5 + 0.5 * Math.abs(Math.sin(t * 2.6 + n)));
     ctx.beginPath(); ctx.ellipse(0, 0, 8, 4.5, 0, 0, TAU); shape(ctx, n % 4 ? '#f6aac0' : P.hi, 1.4); ctx.restore();
   }
@@ -927,13 +1084,13 @@ function drawWhip(ctx, k) {   // «хлыст»: горизонтальные ш
   const a = Math.sin(k * Math.PI);
   ctx.save(); ctx.globalAlpha = a * 0.5;
   for (let n = 0; n < 22; n++) {
-    const y = (n * 97.3 + 13) % H, w = 120 + (n * 53) % 260, x = ((n * 211) % (W + 300)) - 150 - k * 300;
+    const y = (n * 97.3 + 13) % SH, w = 120 + (n * 53) % 260, x = ((n * 211) % (SW + 300)) - 150 - k * 300;
     ctx.fillStyle = n % 3 ? 'rgba(255,255,255,0.5)' : 'rgba(255,200,170,0.6)'; ctx.fillRect(x, y, w, 2 + (n % 3));
   }
   ctx.restore();
 }
 function drawIris(ctx, cx, cy, r) {
-  ctx.save(); ctx.fillStyle = '#000'; ctx.beginPath(); ctx.rect(0, 0, W, H);
+  ctx.save(); ctx.fillStyle = '#000'; ctx.beginPath(); ctx.rect(0, 0, SW, SH);
   if (r > 0.5) { ctx.moveTo(cx + r, cy); ctx.arc(cx, cy, r, 0, TAU); }
   ctx.fill('evenodd'); ctx.restore();
 }
@@ -946,67 +1103,81 @@ function drawBurn(ctx, cx, cy, k, t) {   // прожог плёнки: рван�
 }
 
 // ---------- холодное открытие: ракорд 3-2-1 (эталон стиля вставок) ----------
-function drawCold(ctx, T, pt) {
-  if (T >= COLD.reveal) { drawIris(ctx, pt.x, pt.y, EASE.outCubic(clamp((T - COLD.reveal) / 0.7, 0, 1)) * 720); return; }
-  ctx.fillStyle = '#060305'; ctx.fillRect(0, 0, W, H);
-  if (T >= COLD.flash) { ctx.fillStyle = '#fff6e0'; ctx.fillRect(0, 0, W, H); return; }
-  const r = Math.random;
+// bw — ширина перфорированных полос по бокам (80 в ландшафте, 48 в портрете), R — радиус диафрагмы «раскрытия» (720 / до дальнего угла вида)
+function drawCold(ctx, T, pt, bw = 80, R = 720) {
+  if (T >= COLD.reveal) { drawIris(ctx, pt.x, pt.y, EASE.outCubic(clamp((T - COLD.reveal) / 0.7, 0, 1)) * R); return; }
+  ctx.fillStyle = '#060305'; ctx.fillRect(0, 0, SW, SH);
+  if (T >= COLD.flash) { ctx.fillStyle = '#fff6e0'; ctx.fillRect(0, 0, SW, SH); return; }
+  const r = Math.random, cx = SW / 2, cy = SH / 2, iw = SW - 2 * bw;
   if (T < COLD.lead) {   // проектор разгоняется: мерцающий прямоугольник света
-    ctx.fillStyle = `rgba(255,236,200,${(0.04 + r() * 0.07) * (0.3 + T / COLD.lead)})`; ctx.fillRect(90, 40, 780, 460);
+    ctx.fillStyle = `rgba(255,236,200,${(0.04 + r() * 0.07) * (0.3 + T / COLD.lead)})`; ctx.fillRect(bw + 10, 40, iw - 20, SH - 80);
   } else {
     const u = (T - COLD.lead) / COLD.num, n = 3 - Math.floor(u), kk = u % 1;
     ctx.save(); ctx.translate(0, (r() - 0.5) * 3);
-    leaderPaper(ctx, kk);
-    text(ctx, String(n), 480, 284, { size: 240, color: '#1e140c', outline: '#f8f0e0', lw: 8 });
-    const vg = ctx.createRadialGradient(480, 270, 250, 480, 270, 560); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.7)');
-    ctx.fillStyle = vg; ctx.fillRect(80, -4, 800, H + 8);
-    for (let q = 0; q < 3; q++) if (r() < 0.5) { ctx.fillStyle = `rgba(20,12,6,${0.2 + r() * 0.3})`; ctx.fillRect(100 + r() * 760, 0, 1 + r() * 1.5, H); }
+    leaderPaper(ctx, kk, cy, 196, bw);
+    text(ctx, String(n), cx, cy + 14, { size: 240, color: '#1e140c', outline: '#f8f0e0', lw: 8 });
+    const vg = ctx.createRadialGradient(cx, cy, 250, cx, cy, 560); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.7)');
+    ctx.fillStyle = vg; ctx.fillRect(bw, -4, iw, SH + 8);
+    for (let q = 0; q < 3; q++) if (r() < 0.5) { ctx.fillStyle = `rgba(20,12,6,${0.2 + r() * 0.3})`; ctx.fillRect(bw + 20 + r() * (iw - 40), 0, 1 + r() * 1.5, SH); }
     ctx.restore();
   }
-  perforation(ctx, (T * 1100) % 54);
+  perforation(ctx, (T * 1100) % 54, bw);
 }
 // бумага ракорда: сепия-градиент, сектор «радара», перекрестие, двойное кольцо
-function leaderPaper(ctx, sweep, cy = 270, ring = 196) {
-  const g = ctx.createRadialGradient(480, 270, 60, 480, 270, 520); g.addColorStop(0, '#e2d1ae'); g.addColorStop(1, '#5e4a33');
-  ctx.fillStyle = g; ctx.fillRect(80, -4, 800, H + 8);
-  if (sweep != null) { ctx.fillStyle = 'rgba(40,28,16,0.33)'; ctx.beginPath(); ctx.moveTo(480, cy); ctx.arc(480, cy, 560, -Math.PI / 2, -Math.PI / 2 + sweep * TAU); ctx.closePath(); ctx.fill(); }
-  ctx.strokeStyle = 'rgba(40,30,20,0.55)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(80, cy); ctx.lineTo(880, cy); ctx.moveTo(480, 0); ctx.lineTo(480, H); ctx.stroke();
-  ctx.strokeStyle = '#f8f0e0'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(480, cy, ring, 0, TAU); ctx.stroke();
-  ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(480, cy, ring - 30, 0, TAU); ctx.stroke();
+function leaderPaper(ctx, sweep, cy = SH / 2, ring = 196, bw = 80) {
+  const cx = SW / 2, g = ctx.createRadialGradient(cx, SH / 2, 60, cx, SH / 2, 520); g.addColorStop(0, '#e2d1ae'); g.addColorStop(1, '#5e4a33');
+  ctx.fillStyle = g; ctx.fillRect(bw, -4, SW - 2 * bw, SH + 8);
+  if (sweep != null) { ctx.fillStyle = 'rgba(40,28,16,0.33)'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, 560, -Math.PI / 2, -Math.PI / 2 + sweep * TAU); ctx.closePath(); ctx.fill(); }
+  ctx.strokeStyle = 'rgba(40,30,20,0.55)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(bw, cy); ctx.lineTo(SW - bw, cy); ctx.moveTo(cx, 0); ctx.lineTo(cx, SH); ctx.stroke();
+  ctx.strokeStyle = '#f8f0e0'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(cx, cy, ring, 0, TAU); ctx.stroke();
+  ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, cy, ring - 30, 0, TAU); ctx.stroke();
 }
-function perforation(ctx, off) {   // перфорация по краям плёнки
-  ctx.fillStyle = '#0b0806'; ctx.fillRect(0, 0, 80, H); ctx.fillRect(880, 0, 80, H);
+function perforation(ctx, off, bw = 80) {   // перфорация по краям плёнки
+  ctx.fillStyle = '#0b0806'; ctx.fillRect(0, 0, bw, SH); ctx.fillRect(SW - bw, 0, bw, SH);
   ctx.fillStyle = 'rgba(217,199,164,0.35)';
-  for (let y = -54 + off; y < H; y += 54) { ctx.beginPath(); ctx.roundRect(24, y, 32, 22, 5); ctx.roundRect(904, y, 32, 22, 5); ctx.fill(); }
+  const hx = (bw - 32) / 2;
+  for (let y = -54 + off; y < SH; y += 54) { ctx.beginPath(); ctx.roundRect(hx, y, 32, 22, 5); ctx.roundRect(SW - bw + hx, y, 32, 22, 5); ctx.fill(); }
 }
-// Финальная карточка: тот же ракорд, сердце в кольце и посвящение оригинала
-function drawEndCard(ctx, T) {
-  ctx.fillStyle = '#060305'; ctx.fillRect(0, 0, W, H);
+// Финальная карточка: тот же ракорд, сердце в кольце и посвящение оригинала. В портрете (SW < 700) фраза переносится по словам, крупнее и ниже сердца
+function drawEndCard(ctx, T, bw = 80) {
+  const pt = SW < 700, cx = SW / 2, iw = SW - 2 * bw, hy = pt ? SH * 0.3 : 196;
+  ctx.fillStyle = '#060305'; ctx.fillRect(0, 0, SW, SH);
   const a = clamp(T / 0.7, 0, 1), fr = Math.floor(T * 24);
   ctx.save(); ctx.globalAlpha = a; ctx.translate(0, (hash(fr) - 0.5) * 2.4 * (1 - clamp(T / 3, 0, 1)));
-  leaderPaper(ctx, null, 190, 104);
+  leaderPaper(ctx, null, hy - 6, 104, bw);
   const beat = Math.max(0, Math.sin(T * 5.5)) ** 8, hk = EASE.outBack(clamp((T - 0.3) / 0.4, 0, 1));
-  ctx.save(); ctx.translate(480, 196); ctx.scale(hk * (1 + beat * 0.1), hk * (1 + beat * 0.1)); heartPath(ctx, 0, 0, 40); shape(ctx, P.red, 6);
+  ctx.save(); ctx.translate(cx, hy); ctx.scale(hk * (1 + beat * 0.1), hk * (1 + beat * 0.1)); heartPath(ctx, 0, 0, 40); shape(ctx, P.red, 6);
   ctx.fillStyle = 'rgba(255,246,226,0.7)'; ctx.beginPath(); ctx.ellipse(-22, -18, 7, 12, 0.6, 0, TAU); ctx.fill(); ctx.restore();
   const l1 = clamp((T - 0.9) / 0.6, 0, 1), l2 = clamp((T - 1.6) / 0.6, 0, 1), l3 = clamp((T - 2.6) / 0.8, 0, 1);
-  ctx.globalAlpha = a * l1; text(ctx, 'посвящается всем девушкам,', 480, 352 + (1 - l1) * 8, { size: 34, color: P.ink, outline: false, weight: 900 });
-  ctx.globalAlpha = a * l2; text(ctx, 'которых не пугают неприятности', 480, 398 + (1 - l2) * 8, { size: 34, color: P.ink, outline: false, weight: 900 });
-  ctx.globalAlpha = a * l3; text(ctx, 'Поппи: Хэллоуинский кошмар · КОНЕЦ', 480, 462, { size: 15, color: '#5e4a33', outline: false, weight: 900 });
+  if (!pt) {
+    ctx.globalAlpha = a * l1; text(ctx, 'посвящается всем девушкам,', cx, 352 + (1 - l1) * 8, { size: 34, color: P.ink, outline: false, weight: 900 });
+    ctx.globalAlpha = a * l2; text(ctx, 'которых не пугают неприятности', cx, 398 + (1 - l2) * 8, { size: 34, color: P.ink, outline: false, weight: 900 });
+    ctx.globalAlpha = a * l3; text(ctx, 'Поппи: Хэллоуинский кошмар · КОНЕЦ', cx, 462, { size: 15, color: '#5e4a33', outline: false, weight: 900 });
+  } else {
+    let y = hy + 112;
+    for (const [str, k] of [['посвящается всем девушкам,', l1], ['которых не пугают неприятности', l2]]) {
+      ctx.globalAlpha = a * k;
+      for (const ln of wrap(ctx, str, iw - 56, 32, 900)) { text(ctx, ln, cx, y + (1 - k) * 8, { size: 32, color: P.ink, outline: false, weight: 900 }); y += 40; }
+      y += 10;
+    }
+    ctx.globalAlpha = a * l3; y += 14;
+    for (const ln of wrap(ctx, 'Поппи: Хэллоуинский кошмар · КОНЕЦ', iw - 40, 18, 900)) { text(ctx, ln, cx, y, { size: 18, color: '#5e4a33', outline: false, weight: 900 }); y += 24; }
+  }
   ctx.globalAlpha = a;
-  const vg = ctx.createRadialGradient(480, 270, 250, 480, 270, 560); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
-  ctx.fillStyle = vg; ctx.fillRect(80, -4, 800, H + 8);
-  if (hash(fr * 1.7) < 0.3) { ctx.fillStyle = 'rgba(40,24,12,0.3)'; ctx.fillRect(100 + hash(fr) * 760, 0, 1.2, H); }
+  const vg = ctx.createRadialGradient(cx, SH / 2, 250, cx, SH / 2, 560); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+  ctx.fillStyle = vg; ctx.fillRect(bw, -4, iw, SH + 8);
+  if (hash(fr * 1.7) < 0.3) { ctx.fillStyle = 'rgba(40,24,12,0.3)'; ctx.fillRect(bw + 20 + hash(fr) * (iw - 40), 0, 1.2, SH); }
   ctx.restore();
-  perforation(ctx, (54 * 8 * EASE.outCubic(clamp(T / 1.6, 0, 1))) % 54);   // плёнка доезжает и встаёт
+  perforation(ctx, (54 * 8 * EASE.outCubic(clamp(T / 1.6, 0, 1))) % 54, bw);   // плёнка доезжает и встаёт
 }
 
 // ---------- кнопка пропуска с кольцом ----------
-function drawSkip(ctx, k, hover, active) {
-  const { x, y, w, h } = SB, r = h / 2;
+function drawSkip(ctx, k, hover, active, rect = SB, size = 14) {
+  const { x, y, w, h } = rect, r = h / 2;
   ctx.save();
   ctx.fillStyle = hover || active ? 'rgba(70,46,64,0.95)' : 'rgba(40,26,38,0.85)'; ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
   ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.stroke();
-  text(ctx, active ? 'Держи…' : 'Пропустить ›', x + w / 2, y + h / 2 + 1, { size: 14, color: active ? GOLD : '#f3e2ea', outline: false, weight: 900 });
+  text(ctx, active ? 'Держи…' : 'Пропустить ›', x + w / 2, y + h / 2 + 1, { size, color: active ? GOLD : '#f3e2ea', outline: false, weight: 900 });
   if (k > 0) {
     const per = 2 * (w - 2 * r) + TAU * r;
     ctx.lineWidth = 3.5; ctx.strokeStyle = GOLD; ctx.lineCap = 'round';
@@ -1025,7 +1196,7 @@ const CARD = { w: 248, h: 214, band: 24 };
 let CA = 1;   // прозрачность текущей карточки (уход) — рисовальщики вставок умножают на неё свою
 function drawFilmCard(ctx, o, w, h, paint) {
   const kIn = clamp(o.t / 0.34, 0, 1), kOut = o.dur != null ? clamp((o.t - o.dur) / 0.32, 0, 1) : 0;
-  const eIn = EASE.outBack(kIn), sc = (0.2 + 0.8 * eIn) * (1 - 0.2 * EASE.inQuad(kOut));
+  const eIn = EASE.outBack(kIn), sc = (0.2 + 0.8 * eIn) * (1 - 0.2 * EASE.inQuad(kOut)) * (o.s || 1);   // o.s — масштаб карточки (портрет крупнее)
   const fr = Math.floor(o.t * 24), sd = o.rot >= 0 ? 1 : -1;
   ctx.save(); ctx.globalAlpha = CA = 1 - EASE.inQuad(kOut);
   ctx.translate(o.x + (hash(fr * 3.1 + o.x) - 0.5) * 1.2 + kOut * 70 * sd, o.y + (hash(fr * 1.7 + o.y) - 0.5) * 1.2 + EASE.inQuad(kOut) * 110);
@@ -1058,12 +1229,13 @@ function drawFilmCard(ctx, o, w, h, paint) {
 function drawInsert(ctx, o) { drawFilmCard(ctx, o, CARD.w, CARD.h, INSERTS[o.k] || (() => {})); }
 // Плашка главы — большой кинокадр по центру
 function drawPlate(ctx, pl, T) {
-  drawFilmCard(ctx, { x: 480, y: 250, rot: -0.025, t: T, dur: null }, 620, 210, (c, TT, pw) => {
-    if (pl.top) text(c, pl.top, 0, -52, { size: 20, color: '#7a5a36', outline: false, weight: 900 });
-    text(c, pl.title, 0, pl.sub ? -2 : 8, { size: 58, color: P.ink, outline: false, weight: 900 });
+  const pt = SW < 700;   // портрет: карточка уже окна, крупнее подпись
+  drawFilmCard(ctx, pt ? { x: SW / 2, y: SH * 0.44, rot: -0.025, t: T, dur: null } : { x: 480, y: 250, rot: -0.025, t: T, dur: null }, pt ? Math.min(500, SW - 30) : 620, pt ? 250 : 210, (c, TT, pw) => {
+    if (pl.top) text(c, pl.top, 0, -52, { size: pt ? 24 : 20, color: '#7a5a36', outline: false, weight: 900 });
+    text(c, pl.title, 0, pl.sub ? -2 : 8, { size: pt ? 54 : 58, color: P.ink, outline: false, weight: 900 });
     const k = clamp((TT - 0.35) / 0.4, 0, 1);
     if (k > 0) { c.strokeStyle = P.red; c.lineWidth = 6; c.lineCap = 'round'; c.beginPath(); const L = pw * 0.36; c.moveTo(-L, 38 + (pl.sub ? -6 : 8)); c.quadraticCurveTo(0, 46 + (pl.sub ? -6 : 8), -L + 2 * L * k, 34 + (pl.sub ? -6 : 8)); c.stroke(); }
-    if (pl.sub) text(c, pl.sub, 0, 62, { size: 18, color: '#5e4a33', outline: false, weight: 800 });
+    if (pl.sub) text(c, pl.sub, 0, 62, { size: pt ? 20 : 18, color: '#5e4a33', outline: false, weight: 800 });
   });
 }
 // звукоподражание: тушь + красная кайма + бумажная заливка, буквы скачут
@@ -1384,8 +1556,56 @@ function drawDialog(ctx, who, _s, D) {
   }
   ctx.restore();
 }
-function drawSlot(ctx, who, x, active, D) {
-  const sp = SPEAKERS[who], ps = SLOT.size; let y = SLOT.y;
+// Плашка диалога в портрете (L = portLay()): портреты по краям верхнего ряда (Поппи слева, собеседник справа), имя рядом с говорящим, текст ниже — крупно, сверху вниз
+function drawDialogP(ctx, who, D, L) {
+  const { R, st, t } = D, a = D.k, sp = SPEAKERS[who] || SPEAKERS['Поппи'], th = R.think, { px: x, py: y, pw: w, ph: h, ps } = L;
+  const other = st.ruda || who === 'Руда' ? 'Руда' : 'Краш', hasL = !!st.poppy || who === 'Поппи', hasR = (other === 'Краш' && !!st.crush) || (other === 'Руда' && !!st.ruda) || who === other;
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(0, (1 - a) * 22);
+  if (th) { ctx.fillStyle = THINK; for (let xx = x + 18; xx < x + w - 10; xx += 26) { ctx.beginPath(); ctx.arc(xx, y + 3, 12, 0, TAU); ctx.fill(); } }   // мысли: облачный верх плашки
+  ctx.fillStyle = th ? THINK : 'rgba(18,10,16,0.97)'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 18); ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = th ? '#9d86da' : sp.color; ctx.stroke();
+  const ry = y + 14, lx = x + 16, rx = x + w - 16 - ps;
+  if (hasL) drawSlot(ctx, 'Поппи', lx, who === 'Поппи', D, ps, ry);
+  if (hasR) drawSlot(ctx, other, rx, who === other, D, ps, ry);
+  // имя — плашкой рядом с портретом говорящего (на внутренней стороне)
+  const name = th ? who + ' · думает' : who, fs = 19;
+  ctx.font = `900 ${fs}px ${FONT}`; const nw = ctx.measureText(name).width + 30, left = who === 'Поппи' || !hasR;
+  const nx = left ? lx + ps + 14 : rx - 14 - nw, ny = ry + ps / 2 - 16;
+  ctx.fillStyle = th ? '#9d86da' : sp.color; ctx.beginPath(); ctx.roundRect(nx, ny, nw, 32, 16); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#1a0a14'; ctx.stroke();
+  text(ctx, name, nx + nw / 2, ny + 17, { size: fs, color: '#1c0c16', outline: false });
+  // текст с теми же эффектами, что в ландшафте: *тряска*, ~волна~, мягкое появление букв
+  const maxW = w - 44;
+  ctx.font = `${th ? 'italic ' : ''}700 ${L.font}px ${FONT}`;
+  const fk = (document.fonts ? document.fonts.status : '') + ctx.font + '|' + maxW;   // шрифт догрузился или сменилась ширина — пересчитать раскладку
+  if (!R.L.laid || R.L.fk !== fk) { layoutLine(ctx, R.L, maxW); R.L.fk = fk; }
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const ch = R.L.chars, fr = Math.floor(t * 30), base = th ? '#3b2766' : '#fff6fa';
+  for (let k = 0; k < R.shown && k < ch.length; k++) {
+    const c = ch[k]; if (c.c === ' ') continue;
+    let xx = x + 22 + c.x, yy = L.textTop + L.lh / 2 + c.line * L.lh;
+    if (c.shake || R.s.shakeText) { const m = c.shake ? 3 : 1.6; xx += (hash(k * 13 + fr) - 0.5) * m; yy += (hash(k * 7 + fr * 3) - 0.5) * m; }
+    if (c.wave) yy += Math.sin(t * 7 + k * 0.55) * 2;
+    const age = R.typeT - c.t;
+    if (age < 0.08) { ctx.globalAlpha = a * clamp(age / 0.08, 0.25, 1); yy += (1 - clamp(age / 0.08, 0, 1)) * 3; } else ctx.globalAlpha = a;
+    ctx.fillStyle = c.shake ? (th ? '#a0204a' : '#ff8fa3') : c.wave ? (th ? '#6a3cc0' : '#ffe08a') : base;
+    ctx.font = `${th ? 'italic ' : ''}700 ${L.font}px ${FONT}`; ctx.fillText(c.c, xx, yy);
+  }
+  ctx.globalAlpha = a;
+  if (R.typed && ch.length && R.doneT >= (R.s.hold ?? 0.12)) {   // «готово»: «Дальше ▸» — подсказка (листает тап по любому месту экрана)
+    const bx = x + w - 22, by = y + h - 20 + Math.sin(t * 6) * 2;
+    text(ctx, 'Дальше', bx - 26, by, { size: 17, align: 'right', color: th ? '#7a62c0' : sp.color, outline: false, weight: 900 });
+    ctx.fillStyle = th ? '#7a62c0' : sp.color; ctx.beginPath(); ctx.moveTo(bx - 14, by - 7); ctx.lineTo(bx, by); ctx.lineTo(bx - 14, by + 7); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawVignetteBox(ctx) {   // виньетка окна (в ландшафте — drawVignette из backgrounds.js на всю рамку)
+  const g = ctx.createRadialGradient(SW / 2, SH / 2, SH * 0.36, SW / 2, SH / 2, SH * 0.82);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.6)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, SW, SH);
+}
+function drawSlot(ctx, who, x, active, D, ps = SLOT.size, y0 = SLOT.y) {
+  const sp = SPEAKERS[who]; let y = y0;
   if (active && D.whoT < 0.2) y -= Math.sin(D.whoT / 0.2 * Math.PI) * 6;          // прыжок при смене говорящего
   if (who === 'Поппи' && D.faceT < 0.2) y -= Math.sin(D.faceT / 0.2 * Math.PI) * 6; // и при смене эмоции
   const sc = active ? 1 : 0.9;
@@ -1423,6 +1643,14 @@ function drawFace(ctx, f, ps, t) {
 
 // Титульник (cut 4.1): буквы были запечены в картинку — затёрты при векторизации и нарисованы шрифтом.
 // Рисуется в координатах сцены, чтобы двигаться вместе с фоном под камерой.
+function drawTitleCardP(ctx, t) {   // титульник в портрете: три строки по центру окна (в ландшафте надписи лежат на картинке в мире)
+  const a = Math.min(1, t * 1.5);
+  ctx.save(); ctx.globalAlpha = a;
+  text(ctx, 'Поппи:', SW / 2, SH * 0.36, { size: 92, color: '#5a0a12', lw: 10, outline: '#0e0204' });
+  text(ctx, 'Хэллоуинский', SW / 2, SH * 0.36 + 82, { size: 52, color: '#5a0a12', lw: 8, outline: '#0e0204' });
+  text(ctx, 'кошмар', SW / 2, SH * 0.36 + 138, { size: 52, color: '#5a0a12', lw: 8, outline: '#0e0204' });
+  ctx.restore();
+}
 function drawTitleCard(ctx, t) {
   const a = Math.min(1, t * 1.5);
   ctx.save(); ctx.globalAlpha = a;

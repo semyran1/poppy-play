@@ -2,6 +2,7 @@
 // поверх каждый кадр — живые слои (мерцание ламп, туман, капающие стены, луна).
 import { TAU, rand } from '../engine/util.js';
 import { drawSceneBg } from './scenes.js';
+import { view } from '../engine/core.js';
 
 // Локации игры -> векторные ассеты оригинала; процедурные фоны ниже — запасной вариант, пока вектор грузится
 // lair — процедурный закат с утёсами ниже: у вектора title посреди кадра силуэт героини, он спорит с Рудой и Поппи
@@ -192,6 +193,24 @@ export function drawBackground(ctx, name, t) {
     }
   }
   if (name === 'lair') { ctx.fillStyle = `rgba(255,120,60,${0.08 + 0.05 * Math.sin(t * 2)})`; ctx.fillRect(0, 0, W, H); }
+}
+
+// Фон боя на весь динамический вид: масштаб «cover» с привязкой к полу (пол фона 482 → view.ground), верх при необходимости обрезается.
+// Горизонталь: если фон шире вида (портрет, ультраширокий), показывается полоса вокруг «фокуса» сцены (доля ширины фона) с лёгкой
+// прокруткой за героиней (camX — её x в координатах вида). На 960×540 (s = 1, без запаса) ничего не сдвигается — как раньше.
+export const BG_FOCUS = { cinema: 0.37, street: 0.5, restroom: 0.5, facade: 0.5, lair: 0.5 };
+// bgPlace(ctx, …) — ставит систему координат фона 960×540 в вид (вызывать внутри save/restore): так же рисуются «живые» слои,
+// привязанные к предметам фона (лампы готики и т. п.).
+export function bgPlace(ctx, name, camX = null) {
+  const G = view.ground, s = Math.max(view.W / 960, G / FLOOR), ex = 960 * s - view.W;
+  const cam = camX === null ? 0.5 : camX / view.W;
+  const u = Math.min(1, Math.max(0, (BG_FOCUS[name] ?? 0.5) + (cam - 0.5) * 0.7));
+  ctx.translate(-ex * u, G - FLOOR * s); ctx.scale(s, s);
+}
+export function drawBackgroundView(ctx, name, t, camX = null) {
+  ctx.save(); bgPlace(ctx, name, camX);
+  drawBackground(ctx, name, t);
+  ctx.restore();
 }
 
 // Рамка-виньетка (Sprite9/12 оригинала — рваные чёрные края)

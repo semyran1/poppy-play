@@ -6,9 +6,12 @@ import { rand, clamp, pick, TAU } from '../engine/util.js';
 import { sfx, playMusic } from '../engine/audio.js';
 import { drawActor, preload } from '../art/scenes.js';
 import { button, text } from './ui.js';
+import { fillFull } from '../engine/frame.js';
 import { makeEnemy } from './enemies.js';
-import { GROUND } from './player.js';
+import { GROUND, ARENA } from './player.js';
+import { view } from '../engine/core.js';
 import { spawnFoe, addSlam, addWaves, startRain, updateHazards, drawHazards, softGlow, heartPath } from './chapter3.js';
+import { metrics, fitWrap } from './overlays_p.js';
 
 const H = 236;                  // рост Руды на экране
 const FEET = 118;               // от центра хитбокса до ног
@@ -29,13 +32,13 @@ const SUBS = {
 export function makeRuda() {
   preload(['ruda']);
   return {
-    id: 'ruda', name: 'Руда', intro: 'Соседка, что приходит раз в месяц', x: 480, y: -200, r: 70, s: 1,
+    id: 'ruda', name: 'Руда', intro: 'Соседка, что приходит раз в месяц', x: view.W / 2, y: -200, r: 70, s: 1,
     hp: 14000, maxHp: 14000, minHp: 1400, phase: 1, t: 0, st: 0, hitT: 0, invuln: 0, state: 'enter', last: null,
     eyeT: 0, dark: 0, slams: [], waves: [], rain: null, noChest: true, alpha: 1, swell: 0, lean: 0,
     lines: { 2: 'Ты всё ещё тут? Упрямая.', 3: 'Ладно. Вспомним всех, кто был до меня!' },
     deathLine: 'Увидимся через 28 дней!',
     upd: updateRuda, drw: drawRuda, resolve,
-    side() { return this.x < 480 ? 1 : -1; },   // в какую сторону больше места для реплики
+    side() { return this.x < view.W / 2 ? 1 : -1; },   // в какую сторону больше места для реплики
   };
 }
 
@@ -49,13 +52,13 @@ function updateRuda(G, b, dt) {
   if (Math.random() < dt * 4) G.parts.spawn({ x: b.x + rand(-80, 80), y: b.y + rand(-60, 90), vx: rand(-20, 20), vy: -rand(20, 60), life: 1.2, size: rand(2, 4), color: Math.random() < 0.5 ? '#ff5a4a' : '#ffb08a', shape: 'drop' });
 
   if (b.state === 'enter') {
-    b.y += (196 - b.y) * Math.min(1, dt * 2.2);
+    b.y += (ARENA.sky + 196 - b.y) * Math.min(1, dt * 2.2);
     if (b.st > 1.7) { b.state = 'idle'; b.st = 0; bubble(b, 'Ну здравствуй, Поппи. Соскучилась?'); }
     return;
   }
   if (b.state === 'hug') return updateHug(G, b, dt);
   if (b.state === 'plea') {
-    b.x += (480 - b.x) * Math.min(1, dt * 2); b.y += (200 - b.y) * Math.min(1, dt * 2);
+    b.x += (view.W / 2 - b.x) * Math.min(1, dt * 2); b.y += (ARENA.sky + 200 - b.y) * Math.min(1, dt * 2);
     if (b.st > 1.6 && !b.asked) { b.asked = true; b.wantChoice = true; }
     return;
   }
@@ -75,9 +78,9 @@ function updateRuda(G, b, dt) {
     return;
   }
   // парит, покачиваясь
-  const tx = clamp(480 + Math.sin(b.t * 0.42) * 250 + (G.p.x - 480) * 0.25, 150, 810);
+  const tx = clamp(view.W / 2 + Math.sin(b.t * 0.42) * 250 * Math.min(1, (view.W - 300) / 660) + (G.p.x - view.W / 2) * 0.25, 150, view.W - 150);
   b.x += (tx - b.x) * Math.min(1, dt * 0.8);
-  b.y += (196 + Math.sin(b.t * 1.3) * 10 - b.y) * Math.min(1, dt * 3);
+  b.y += (ARENA.sky + 196 + Math.sin(b.t * 1.3) * 10 - b.y) * Math.min(1, dt * 3);
   b.lean += ((b.state === 'letters' && b.st < 1 ? 0.12 * b.side() : Math.sin(b.t * 0.9) * 0.05) - b.lean) * Math.min(1, dt * 4);
 
   if (b.state === 'idle') {
@@ -107,7 +110,7 @@ function updateRuda(G, b, dt) {
     updateStorm(G, b, dt);
   } else if (b.state === 'drops') {
     if (b.st > 0.8 && !b.done) {
-      b.done = 1; for (let i = 0; i < 4; i++) G.enemies.push(makeEnemy(i === 3 && b.phase > 1 ? 'crier' : 'droplet', clamp(b.x + rand(-160, 160), 80, 880), b.y + 40, G.waveIndex));
+      b.done = 1; for (let i = 0; i < 4; i++) G.enemies.push(makeEnemy(i === 3 && b.phase > 1 ? 'crier' : 'droplet', clamp(b.x + rand(-160, 160), 80, view.W - 80), b.y + 40, G.waveIndex));
       sfx('pop', { pitch: 0.6 });
     }
     if (b.st > 1.5) { b.state = 'idle'; b.st = 0; }
@@ -116,7 +119,7 @@ function updateRuda(G, b, dt) {
 
 function startLetters(G, b, phrase, spd) {
   const side = b.side(), chars = [...phrase], step = 34;
-  const cx = clamp(b.x + side * 210, 60 + chars.length * step / 2, 900 - chars.length * step / 2);
+  const cx = clamp(b.x + side * 210, 60 + chars.length * step / 2, view.W - 60 - chars.length * step / 2);
   b.letters = { chars, step, x0: cx - (chars.length - 1) * step / 2, y: Math.max(112, b.y - 60), next: 0, spd, cx };
   b.state = 'letters'; b.st = 0;
   bubble(b, phrase, 1.0 + chars.length * 0.09 + 0.2, true);
@@ -128,7 +131,7 @@ function startStorm(G, b) {
   while (list.length < n) { const s = pick(all); if (!list.includes(s)) list.push(s); }
   b.state = 'storm'; b.st = 0; b.storm = { list, i: -1, st: 0 };
   bubble(b, 'Буря! Вспомним всех?', 1.4);
-  G.floaters.add(480, 330, 'БУРЯ!', { size: 44, color: '#ff9ad0', life: 1.2, vy: -40 });
+  G.floaters.add(view.W / 2, view.H * 0.61, 'БУРЯ!', { size: 44, color: '#ff9ad0', life: 1.2, vy: -40 });
   sfx('boom', { pitch: 0.5, vol: 0.5 });
 }
 function updateStorm(G, b, dt) {
@@ -137,10 +140,10 @@ function updateStorm(G, b, dt) {
   const sub = S.list[S.i], p = G.p;
   switch (sub) {
     case 'tentacle':
-      if (!S.done) { S.done = 1; addSlam(b, 'tentacle', p.x, 0, 1.0); if (b.phase === 3) addSlam(b, 'tentacle', clamp(960 - p.x, 80, 880), 0.5, 1.0); }
+      if (!S.done) { S.done = 1; addSlam(b, 'tentacle', p.x, 0, 1.0); if (b.phase === 3) addSlam(b, 'tentacle', clamp(view.W - p.x, 80, view.W - 80), 0.5, 1.0); }
       break;
     case 'popcorn':
-      if ((S.done || 0) < 7 && S.st > (S.done || 0) * 0.17) { S.done = (S.done || 0) + 1; G.enemies.push(makeEnemy('popcorn', rand(80, 880), -20, 4)); }
+      if ((S.done || 0) < 7 && S.st > (S.done || 0) * 0.17) { S.done = (S.done || 0) + 1; G.enemies.push(makeEnemy('popcorn', rand(80, view.W - 80), -20, 4)); }
       break;
     case 'babah':
       b.swell = Math.min(1, S.st / 0.9);
@@ -161,13 +164,13 @@ function updateStorm(G, b, dt) {
     if (S.i >= S.list.length) { b.state = 'idle'; b.st = 0; } else announce(G, b, S.list[S.i]);
   }
 }
-function announce(G, b, sub) { G.floaters.add(480, 340, SUBS[sub].name, { size: 28, color: '#ffe0ea', life: 1.3, vy: -30 }); if (sub === 'shock') b.shockWarn = 0.9; }
+function announce(G, b, sub) { G.floaters.add(view.W / 2, view.H * 0.63, SUBS[sub].name, { size: 28, color: '#ffe0ea', life: 1.3, vy: -30 }); if (sub === 'shock') b.shockWarn = 0.9; }
 
 // выбор игрока (вызывает play.js)
 function resolve(G, ending) {
   const b = G.boss; b.chosen = true; b.say = null;
   if (ending === 'hug') {
-    b.state = 'hug'; b.st = 0; b.invuln = 99; b.hugX = clamp(G.p.x + (G.p.x < 480 ? 86 : -86), 90, 870);
+    b.state = 'hug'; b.st = 0; b.invuln = 99; b.hugX = clamp(G.p.x + (G.p.x < view.W / 2 ? 86 : -86), 90, view.W - 90);
     G.say('Иди сюда. Обнимемся.', '#fff');
     sfx('heal', { pitch: 1.2 }); playMusic('calm');
   } else {
@@ -233,8 +236,8 @@ function drawSay(ctx, b) {
     });
   } else {
     // сбоку от Руды (полоса HP сверху не перекрывается)
-    ctx.font = '900 17px Nunito, sans-serif'; const w = ctx.measureText(S.s).width + 30, side = b.x < 480 ? 1 : -1;
-    const bx = clamp(b.x + side * (w / 2 + 84), w / 2 + 10, 950 - w / 2), by = b.state === 'hug' ? b.y - 140 : b.y - 70;
+    ctx.font = '900 17px Nunito, sans-serif'; const w = ctx.measureText(S.s).width + 30, side = b.x < view.W / 2 ? 1 : -1;
+    const bx = clamp(b.x + side * (w / 2 + 84), w / 2 + 10, view.W - 10 - w / 2), by = b.state === 'hug' ? b.y - 140 : b.y - 70;
     ctx.fillStyle = '#fff4f6'; ctx.beginPath(); ctx.moveTo(bx - side * (w / 2 - 6), by + 6); ctx.lineTo(b.x + side * 50, by + 24); ctx.lineTo(bx - side * (w / 2 - 6), by - 8); ctx.fill();
     ctx.beginPath(); ctx.roundRect(bx - w / 2, by - 18, w, 36, 15); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#7a0d18'; ctx.stroke();
     ctx.fillStyle = '#7a0d18'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(S.s, bx, by + 1);
@@ -245,7 +248,7 @@ function drawSay(ctx, b) {
 // Экран выбора на 10 % HP. Возвращает 0 (обнять), 1 (добить) или -1.
 export function drawRudaChoice(ctx, G, inp) {
   const k = clamp(G.phaseT / 0.5, 0, 1);
-  ctx.fillStyle = `rgba(20,2,10,${0.55 * k})`; ctx.fillRect(0, 0, 960, 540);
+  fillFull(ctx, `rgba(20,2,10,${0.55 * k})`);   // затемнение — на весь вид (выбор рисуется в дизайн-рамке)
   if (k < 1) return -1;
   text(ctx, 'Руда устала. Что сделает Поппи?', 480, 300, { size: 26, color: '#ffe6ef', lw: 6 });
   let res = -1;
@@ -260,14 +263,37 @@ export function drawRudaChoice(ctx, G, inp) {
   return res;
 }
 
+// Портретный выбор (полный вид 540×H): заголовок в 1–2 строки и две крупные кнопки столбиком; подсказка клавиш — только без тача.
+export function drawRudaChoiceP(ctx, G, inp) {
+  const M = metrics(), k = clamp(G.phaseT / 0.5, 0, 1), touch = !!inp.isTouch;
+  ctx.fillStyle = `rgba(20,2,10,${0.62 * k})`; ctx.fillRect(0, 0, view.W, view.H);
+  if (k < 1) return -1;
+  const bw = Math.min(M.w - 24, 460), bh = Math.max(104, M.btnH + 44), gap = 30, subH = 34, blockH = 2 * (bh + subH) + gap;
+  const ts = fitWrap(ctx, 'Руда устала. Что сделает Поппи?', M.w - 20, 2, 34, 24, 900), titleH = ts.lines.length * (ts.size + 8);
+  const top = clamp(view.H * 0.5 - (titleH + 36 + blockH) / 2, M.top + 110, Math.max(M.top + 110, view.H - M.sb - blockH - titleH - 64));
+  ts.lines.forEach((l, j) => text(ctx, l, M.cx, top + ts.size * 0.6 + j * (ts.size + 8), { size: ts.size, color: '#ffe6ef', lw: 7 }));
+  let y = top + titleH + 36, res = -1;
+  const sel = G.choiceSel ?? 0, bx = M.cx - bw / 2;
+  [['Обнять', '#ff5d8f', 'мир, чай и плед'], ['Добить', '#b3203a', 'война до конца']].forEach(([lbl, col, sub], i) => {
+    if (!touch && sel === i) { ctx.save(); ctx.strokeStyle = `rgba(255,230,160,${0.6 + 0.4 * Math.sin(G.t * 8)})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.roundRect(bx - 8, y - 8, bw + 16, bh + 16, 24); ctx.stroke(); ctx.restore(); }
+    if (button(ctx, inp, bx, y, bw, bh, lbl, { color: col, size: 40 })) res = i;
+    if (i === 0) { heartPath(ctx, bx + 44, y + bh / 2, 13); ctx.fillStyle = '#fff'; ctx.fill(); }
+    text(ctx, sub, M.cx, y + bh + subH * 0.6, { size: Math.max(19, M.minF), color: '#ffd0dc', weight: 800, lw: 4 });
+    y += bh + subH + gap;
+  });
+  if (!touch) text(ctx, '← →  и  Enter   ·   или кликни', M.cx, view.H - Math.max(M.sb + 12, 18), { size: 15, color: '#c9b0ff', weight: 700, lw: 3 });
+  return res;
+}
+
 // Эмбиент логова: искры и лепестки, поднимающиеся от пола
-const embers = Array.from({ length: 26 }, () => ({ x: Math.random() * 960, y: Math.random() * 480, v: 20 + Math.random() * 40, s: 1 + Math.random() * 2.2, ph: Math.random() * 6 }));
+const embers = Array.from({ length: 26 }, () => ({ fx: Math.random(), x: null, y: Math.random() * 480, v: 20 + Math.random() * 40, s: 1 + Math.random() * 2.2, ph: Math.random() * 6 }));
 let lastT = 0;
 export function drawLairAmbient(ctx, t) {
   const dt = Math.min(0.05, Math.max(0, t - lastT)); lastT = t;
   ctx.save(); ctx.globalCompositeOperation = 'lighter';
   for (const e of embers) {
-    e.y -= e.v * dt; e.x += Math.sin(t * 1.3 + e.ph) * 12 * dt; if (e.y < -5) { e.y = 485; e.x = Math.random() * 960; }
+    if (e.x === null) e.x = e.fx * view.W;
+    e.y -= e.v * dt; e.x += Math.sin(t * 1.3 + e.ph) * 12 * dt; if (e.y < -5) { e.y = GROUND + 3; e.x = Math.random() * view.W; }
     ctx.fillStyle = `rgba(255,${120 + (e.ph * 20 | 0)},60,${0.35 + 0.3 * Math.sin(t * 4 + e.ph)})`; ctx.beginPath(); ctx.arc(e.x, e.y, e.s, 0, TAU); ctx.fill();
   }
   ctx.restore();

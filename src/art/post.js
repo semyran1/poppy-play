@@ -1,7 +1,9 @@
 // Пост-обработка кадра «хэллоуинский кинотеатр» (docs/ATMOSPHERE.md, P1-1): цветокор главы, тонированная
 // виньетка, «сердцебиение» на низком здоровье, плёночное зерно, царапины и пылинки, мерцание проектора,
 // переход-диафрагма между сценами. В бою всё на половинной силе — враги должны читаться.
-const W = 960, H = 540;
+// W, H — живые привязки к размеру вида (engine/core.js); эффекты считаются от него, форма виньетки — эллипс по пропорции вида
+import { W, H, view } from '../engine/core.js';
+const DW = 960, DH = 540;
 
 // тинт главы: [цвет, режим, сила]
 const TINT = {
@@ -15,12 +17,13 @@ export const post = { strength: 1, calm: false };   // calm — без плён�
 // ---- виньетка: кэш на offscreen
 let vigCan = null;
 function vignette() {
-  if (vigCan) return vigCan;
+  if (vigCan && vigCan.width === W && vigCan.height === H) return vigCan;
   vigCan = document.createElement('canvas'); vigCan.width = W; vigCan.height = H;
   const c = vigCan.getContext('2d');
-  const g = c.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.98);
+  c.translate(W / 2, H / 2); c.scale(W / DW, H / DH);   // 960×540 → тот же рисунок; на других видах — эллипс по пропорции
+  const g = c.createRadialGradient(0, 0, DH * 0.42, 0, 0, DH * 0.98);
   g.addColorStop(0, 'rgba(14,6,18,0)'); g.addColorStop(0.6, 'rgba(14,6,18,0.32)'); g.addColorStop(1, 'rgba(14,6,18,0.66)');
-  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.fillStyle = g; c.fillRect(-DW, -DH, DW * 2, DH * 2);
   return vigCan;
 }
 
@@ -58,9 +61,10 @@ export function drawGrade(ctx, o = {}) {
     const beat = t => Math.max(0, 1 - Math.abs(ph - t) / 0.06);
     const a = Math.max(beat(0.06), beat(0.28) * 0.8) * (o.hp <= 1 ? 0.26 : 0.18);
     if (a > 0.003) {
-      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.85);
+      ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(W / DW, H / DH);
+      const g = ctx.createRadialGradient(0, 0, DH * 0.3, 0, 0, DH * 0.85);
       g.addColorStop(0, 'rgba(224,35,60,0)'); g.addColorStop(1, `rgba(224,35,60,${a})`);
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = g; ctx.fillRect(-DW, -DH, DW * 2, DH * 2); ctx.restore();
     }
   }
   ctx.restore();
@@ -76,10 +80,11 @@ export function drawFilm(ctx, o = {}) {
   ctx.save();
   // зерно
   const pat = grainTiles(ctx)[tile];
+  ctx.save();
   ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = (fight ? 0.05 : 0.09) * s;
   ctx.translate(-(Math.random() * 256) | 0, -(Math.random() * 256) | 0);
   ctx.fillStyle = pat; ctx.fillRect(0, 0, W + 256, H + 256);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.restore();
   ctx.globalCompositeOperation = 'source-over';
   // мерцание проектора
   const fl = (Math.sin(frame * 0.71) * 0.5 + Math.sin(frame * 1.37 + 1) * 0.5) * 0.5 + 0.5;
@@ -113,9 +118,9 @@ export function drawIris(ctx, rdt) {
 }
 
 // ---- Эмбиент главы (P2-1, P2-2): луч проектора с пылью в кинотеатре, листья на улице, туман у пола
-const dust = Array.from({ length: 40 }, () => ({ x: Math.random() * W, y: Math.random() * 480, s: 1 + Math.random() * 1.5, seed: Math.random() * 9 }));
+const dust = Array.from({ length: 40 }, () => ({ fx: Math.random(), ox: 0, fy: Math.random(), y: null, s: 1 + Math.random() * 1.5, seed: Math.random() * 9 }));
 const LEAF_C = ['#ff7a1a', '#d9480f', '#8a3a10', '#ff7a1a', '#d9480f', '#6b2fa3'];
-const leaves = Array.from({ length: 16 }, (_, i) => ({ x: Math.random() * W, y: Math.random() * 540, vy: 30 + Math.random() * 30, ph: Math.random() * 6, sz: 8 + Math.random() * 6, c: LEAF_C[i % LEAF_C.length], rot: Math.random() * 6 }));
+const leaves = Array.from({ length: 16 }, (_, i) => ({ x: null, fx: Math.random(), fy: Math.random(), y: null, vy: 30 + Math.random() * 30, ph: Math.random() * 6, sz: 8 + Math.random() * 6, c: LEAF_C[i % LEAF_C.length], rot: Math.random() * 6 }));
 let gustT = 0, gust = 0, lastT = 0, glitch = 0;
 export function drawAmbient(ctx, bg, t, fight = true) {
   const dt = Math.min(0.05, Math.max(0, t - lastT)); lastT = t;
@@ -127,17 +132,20 @@ export function drawAmbient(ctx, bg, t, fight = true) {
     glitch = Math.max(0, glitch - dt);
     const fl = 0.85 + 0.15 * Math.sin(t * 9.3) * Math.sin(t * 3.1) - (glitch > 0 && Math.sin(t * 60) > 0 ? 0.6 : 0);
     ctx.globalCompositeOperation = 'lighter';
-    const g = ctx.createLinearGradient(0, -20, 0, 482);
+    const G = view.ground, cx = W / 2;
+    const g = ctx.createLinearGradient(0, -20, 0, G);
     g.addColorStop(0, `rgba(255,241,201,${0.13 * fl * s})`); g.addColorStop(1, 'rgba(255,241,201,0)');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(450, -20); ctx.lineTo(510, -20); ctx.lineTo(760, 482); ctx.lineTo(200, 482); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx - 30, -20); ctx.lineTo(cx + 30, -20); ctx.lineTo(cx + 280, G); ctx.lineTo(cx - 280, G); ctx.closePath(); ctx.fill();
     // пыль в луче
     for (const d of dust) {
-      d.x += Math.sin(t * 0.7 + d.seed) * 10 * dt; d.y += Math.cos(t * 0.5 + d.seed * 2) * 8 * dt - 4 * dt;
-      if (d.y < -5) d.y = 480; if (d.y > 485) d.y = 0;
-      const half = 30 + (d.y + 20) / 502 * 250, inside = Math.max(0, 1 - Math.abs(d.x - 480) / half);
+      if (d.y === null) d.y = d.fy * (G - 2);
+      d.ox += Math.sin(t * 0.7 + d.seed) * 10 * dt; d.y += Math.cos(t * 0.5 + d.seed * 2) * 8 * dt - 4 * dt;
+      if (d.y < -5) d.y = G - 2; if (d.y > G + 3) d.y = 0;
+      const dx = d.fx * W + d.ox;
+      const half = 30 + (d.y + 20) / (G + 20) * 250, inside = Math.max(0, 1 - Math.abs(dx - cx) / half);
       if (inside <= 0) continue;
       ctx.fillStyle = `rgba(255,241,201,${0.6 * inside * (0.6 + 0.4 * Math.sin(t * 3 + d.seed)) * fl * s})`;
-      ctx.beginPath(); ctx.arc(d.x, d.y, d.s, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(dx, d.y, d.s, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -145,8 +153,9 @@ export function drawAmbient(ctx, bg, t, fight = true) {
     gustT -= dt; if (gustT <= 0) { gustT = 6 + Math.random() * 4; gust = 1.2; }
     gust = Math.max(0, gust - dt);
     for (const L of leaves) {
+      if (L.y === null) { L.x = L.fx * W; L.y = L.fy * H; }
       L.y += L.vy * dt; L.x += (Math.sin(t * 2.4 + L.ph) * 30 + gust * 120) * dt; L.rot += dt * (1.5 + gust * 4);
-      if (L.y > 545 || L.x > W + 20) { L.y = -10; L.x = Math.random() * W - (gust > 0 ? 200 : 0); }
+      if (L.y > H + 5 || L.x > W + 20) { L.y = -10; L.x = Math.random() * W - (gust > 0 ? 200 : 0); }
       ctx.save(); ctx.translate(L.x, L.y); ctx.rotate(L.rot); ctx.scale(1, 0.4 + 0.6 * Math.abs(Math.sin(t * 3 + L.ph)));
       ctx.fillStyle = L.c; ctx.globalAlpha = 0.85 * s;
       ctx.beginPath(); ctx.moveTo(-L.sz / 2, 0); ctx.quadraticCurveTo(0, -L.sz * 0.45, L.sz / 2, 0); ctx.quadraticCurveTo(0, L.sz * 0.45, -L.sz / 2, 0); ctx.fill();
@@ -157,7 +166,7 @@ export function drawAmbient(ctx, bg, t, fight = true) {
   for (let i = 0; i < 3; i++) {
     const sp = [8, 14, 22][i], off = (t * sp) % 320;
     ctx.fillStyle = i === 2 ? `rgba(107,47,163,${0.08 * s})` : `rgba(26,11,46,${0.28 * s})`;
-    for (let x = -320 + off; x < W + 320; x += 320) { ctx.beginPath(); ctx.ellipse(x + i * 90, 478 - i * 6, 210, 18 + i * 4, 0, 0, Math.PI * 2); ctx.fill(); }
+    for (let x = -320 + off; x < W + 320; x += 320) { ctx.beginPath(); ctx.ellipse(x + i * 90, view.ground - 4 - i * 6, 210, 18 + i * 4, 0, 0, Math.PI * 2); ctx.fill(); }
   }
   ctx.restore();
 }

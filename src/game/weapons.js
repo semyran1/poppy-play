@@ -1,6 +1,7 @@
 // Оружие: у каждого вида — fire (выстрел по перезарядке) и, если нужно, tick (постоянное действие).
 // Снаряды живут в G.shots, постоянные эффекты (пар, чаша, луч, вихрь) — в G.fx.
 import { WEAPONS } from './data.js';
+import { view } from '../engine/core.js';
 import { rand, TAU, clamp } from '../engine/util.js';
 import { sfx } from '../engine/audio.js';
 import { drawTampon, drawPad, drawPill, drawBottle, drawChoco, drawCup } from '../art/sprites.js';
@@ -17,7 +18,7 @@ export function weaponParams(id, lv) {
   delete p.text; return p;
 }
 
-import { muzzle } from './player.js';
+import { muzzle, GROUND } from './player.js';
 const handY = p => muzzle(p).y;
 const handX = p => muzzle(p).x;
 
@@ -59,7 +60,7 @@ const FIRE = {
   bottle(G, w, P, S) {
     const n = P.n;
     for (let i = 0; i < n; i++) {
-      const tx = clamp(G.densestX() + (i - (n - 1) / 2) * 90 + rand(-20, 20), 60, 900);
+      const tx = clamp(G.densestX() + (i - (n - 1) / 2) * 90 + rand(-20, 20), 60, view.W - 60);
       const ty = G.densestY(tx);
       const T = 0.75; // время полёта
       const vx = (tx - handX(G.p)) / T, vy = (ty - handY(G.p) - 0.5 * 900 * T * T) / T;
@@ -97,7 +98,7 @@ const FIRE = {
   },
   permafrost(G, w, P, S) { FIRE.ice(G, w, P, S); },
   cup(G, w, P, S) {
-    G.fx.push({ kind: 'cup', x: G.p.x, y: 482, w: P.width * S.area, t: 0, life: P.dur * S.duration, grail: !!P.shots, src: w.id });
+    G.fx.push({ kind: 'cup', x: G.p.x, y: GROUND, w: P.width * S.area, t: 0, life: P.dur * S.duration, grail: !!P.shots, src: w.id });
     sfx('pickup', { pitch: 0.7 });
   },
   grail(G, w, P, S) { FIRE.cup(G, w, P, S); },
@@ -175,8 +176,8 @@ export function updateShots(G, dt) {
     if (s.g) s.vy += s.g * dt;
     if (s.rot !== undefined) s.rot += dt * 10;
     s.x += s.vx * dt; s.y += s.vy * dt;
-    if (s.t >= s.life || s.y < -40 || s.y > 560 || s.x < -40 || s.x > 1000) {
-      if (s.onEnd === 'steam' && !s.dead) G.steam(s.x, Math.min(s.y, 482), s.P, s.src);
+    if (s.t >= s.life || s.y < -40 || s.y > view.H + 20 || s.x < -40 || s.x > view.W + 40) {
+      if (s.onEnd === 'steam' && !s.dead) G.steam(s.x, Math.min(s.y, GROUND), s.P, s.src);
       s.dead = true;
     }
     if (G.acc?.trail && s.kind !== 'pad' && !s.dead) emitTrail(G.accTrail ??= [], s, G.acc.trail, dt);

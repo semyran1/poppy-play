@@ -1,10 +1,57 @@
-// Ядро: холст с леттербоксом, фиксированный шаг 60 Гц, хитстоп, замедление, стек сцен.
-export const W = 960, H = 540;
+// Ядро: адаптивный холст (динамический вьюпорт), фиксированный шаг 60 Гц, хитстоп, замедление, стек сцен.
+//
+// ===== API вьюпорта =====
+// Холст всегда занимает окно целиком (CSS width/height = окно). «Логический вид» (VW×VH) подбирается по
+// пропорции окна a = innerWidth / innerHeight, высота логической единицы — одна из базовых 540 (ландшафт) / ширина 540 (портрет):
+//   ландшафт a ≥ 800/540 (1,48): H = 540, W = clamp(round(540·a), 800, 1296)  (16:9 → ровно 960×540, как раньше; 2,4:1 → 1296×540)
+//   ландшафт 1 ≤ a < 1,48 : W = 800, H = clamp(round(800/a), 540, 800)            (планшет 4:3 → 800×600)
+//   портрет  a < 1        : W = 540, H = clamp(round(540/a), 840, Hmax)           (Hmax = 1080 на десктопе — пункт модерации Яндекса 1.6.2.2, длинная
+//                           сторона ≤ 2× короткой; на тач-устройствах (pointer: coarse) Hmax = 1260, чтобы у телефонов 9:19…9:21 не было полей)
+//   портрет  0.64 < a < 1 : H = 840, W = clamp(round(840·a), 540, 840)            (планшет 3:4 → 630×840)
+// Область игры Яндекс Игр на телефоне бывает 532×360 (1,48) и 696×304 (2,29): оба вписываются без полей (docs/MOBILE_ORIENTATION.md §2.4, §5.3).
+// Живые привязки: `export let W, H` и объект `view` (один и тот же объект, поля меняются на месте):
+//   view = { W, H, portrait, orientation ('portrait'|'landscape' — для раздельного хранения рекордов), scale, dx, dy, dpr, vw, vh, uiScale, safe:{l,r,t,b}, frame:{ox,oy,s,w,h}, ground }
+//   scale      — CSS-пикселей на логический (view.W·scale ≈ ширина окна);
+//   dx, dy     — CSS-смещение начала вида (≠0 только при редком леттербоксе на экзотических пропорциях);
+//   safe       — вырезы/жесты (env(safe-area-inset-*)) в ЛОГИЧЕСКИХ единицах: HUD якорится по реальным краям, внутри safe;
+//   uiScale    — множитель HUD/кнопок: 1 на десктопе, до 1.8 на маленьких экранах (эффективный шрифт HUD ≥ ~12 CSS px);
+//   ground     — y пола боя: H − 58 (в 960×540 = 482; player.js экспортирует его же как живую привязку GROUND);
+//   frame      — «дизайн-рамка» 960×540 внутри вида (для сцен, нарисованных строго в 960×540):
+//                ландшафт: s = min(1, W/960) (при W < 960 вписывается по ширине), по центру: ox = (W−960·s)/2, oy = (H−540·s)/2;
+//                портрет (заглушка): s = W/960 (вписать по ширине), ox = 0, oy = (H − 540·s)/2.
+//   game.view / game.W / game.H дублируют те же значения; подписка на смену размеров: onViewChange((view, prev) => …).
+// Сцены (см. main.js, корневая сцена): scene.frame (по умолчанию true) — рисуется в дизайн-рамке, вокруг эмбиент
+// (зеркально-размытый край кадра, engine/frame.js); scene.frame = false — сцена получает полный вид (play);
+// scene.portraitLayout (по умолчанию false) — true означает «сцена сама рисует портретную раскладку на полном виде».
+// Указатель: inp.pointer.x/y — в пространстве текущей сцены (рамка или вид), inp.pointer.rx/ry — всегда в координатах вида.
+export let W = 960, H = 540;
+export const DESIGN_W = 960, DESIGN_H = 540, FLOOR_PAD = 58;
+export const view = {
+  W, H, portrait: false, orientation: 'landscape', scale: 1, dx: 0, dy: 0, dpr: 1, vw: 960, vh: 540, uiScale: 1, ground: H - FLOOR_PAD,
+  safe: { l: 0, r: 0, t: 0, b: 0 }, frame: { ox: 0, oy: 0, s: 1, w: DESIGN_W, h: DESIGN_H },
+};
+const listeners = [];
+export function onViewChange(fn) { listeners.push(fn); return fn; }
+
+const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+// Чистая функция раскладки (проверяется без DOM): окно vw×vh → логический вид. coarse — тач-устройство (снимает потолок 2:1 в портрете)
+export function layoutFor(vw, vh, coarse = false) {
+  const a = vw / vh;
+  let w, h;
+  if (a < 1) {
+    const maxH = coarse ? 1260 : 1080;
+    if (540 / a >= 840) { w = 540; h = clampN(Math.round(540 / a), 840, maxH); }
+    else { h = 840; w = clampN(Math.round(840 * a), 540, 840); }
+  } else if (a >= 800 / 540 - 1e-6) { h = 540; w = clampN(Math.round(540 * a), 800, 1296); }
+  else { w = 800; h = clampN(Math.round(800 / a), 540, 800); }
+  const scale = Math.min(vw / w, vh / h);
+  return { W: w, H: h, portrait: a < 1, scale, dx: (vw - w * scale) / 2, dy: (vh - h * scale) / 2 };
+}
 
 export function createGame(canvas) {
   const ctx = canvas.getContext('2d');
   const game = {
-    canvas, ctx, W, H,
+    canvas, ctx, W, H, view,
     scale: 1, offX: 0, offY: 0, dpr: 1,
     time: 0,          // игровое время, сек (стоит во время хитстопа и паузы)
     realTime: 0,      // реальное время, сек
@@ -15,24 +62,41 @@ export function createGame(canvas) {
     fixedDt: 1 / 60,
   };
 
+  // зонд безопасных зон: невидимый элемент с padding: env(safe-area-inset-*)
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+  document.body.appendChild(probe);
+  const insets = () => { const c = getComputedStyle(probe); return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0, b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 }; };
+
+  const coarseMq = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : null;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const s = Math.min(vw / W, vh / H);
-    game.scale = s; game.dpr = dpr;
-    canvas.style.width = Math.round(W * s) + 'px';
-    canvas.style.height = Math.round(H * s) + 'px';
-    canvas.width = Math.round(W * s * dpr);
-    canvas.height = Math.round(H * s * dpr);
-    const r = canvas.getBoundingClientRect();
-    game.offX = r.left; game.offY = r.top;
+    const vw = Math.max(1, window.innerWidth), vh = Math.max(1, window.innerHeight);
+    const L = layoutFor(vw, vh, !!coarseMq?.matches);
+    const prev = { W: view.W, H: view.H, portrait: view.portrait, ground: view.ground, uiScale: view.uiScale };
+    const ins = insets(), sc = L.scale;
+    W = L.W; H = L.H;
+    Object.assign(view, { W: L.W, H: L.H, portrait: L.portrait, orientation: L.portrait ? 'portrait' : 'landscape', scale: sc, dx: L.dx, dy: L.dy, dpr, vw, vh, ground: L.H - FLOOR_PAD });
+    view.uiScale = clampN(1 / sc, 1, 1.8);
+    // вырезы считаем от края окна, вид может быть смещён на dx/dy
+    view.safe.l = Math.max(0, (ins.l - L.dx) / sc); view.safe.r = Math.max(0, (ins.r - L.dx) / sc);
+    view.safe.t = Math.max(0, (ins.t - L.dy) / sc); view.safe.b = Math.max(0, (ins.b - L.dy) / sc);
+    if (L.portrait) { const s = L.W / DESIGN_W; view.frame = { ox: 0, oy: (L.H - DESIGN_H * s) / 2, s, w: DESIGN_W, h: DESIGN_H }; }
+    else { const s = Math.min(1, L.W / DESIGN_W); view.frame = { ox: (L.W - DESIGN_W * s) / 2, oy: (L.H - DESIGN_H * s) / 2, s, w: DESIGN_W, h: DESIGN_H }; }
+    game.W = L.W; game.H = L.H; game.scale = sc; game.dpr = dpr; game.offX = L.dx; game.offY = L.dy;
+    canvas.style.width = vw + 'px'; canvas.style.height = vh + 'px';
+    canvas.width = Math.round(vw * dpr); canvas.height = Math.round(vh * dpr);
+    if (prev.W !== view.W || prev.H !== view.H || prev.uiScale !== view.uiScale) for (const fn of listeners) { try { fn(view, prev); } catch (e) { console.error(e); } }
   }
   window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 60));
+  window.visualViewport?.addEventListener('resize', resize);
   resize();
 
+  // клиентские координаты (CSS px) → логические координаты вида
   game.toWorld = (cx, cy) => {
     const r = canvas.getBoundingClientRect();
-    return { x: (cx - r.left) / (r.width / W), y: (cy - r.top) / (r.height / H) };
+    return { x: (cx - r.left - view.dx) / view.scale, y: (cy - r.top - view.dy) / view.scale };
   };
 
   game.setScene = (scene, ...args) => {
@@ -42,6 +106,13 @@ export function createGame(canvas) {
   };
 
   game.freeze = (sec) => { game.hitstop = Math.max(game.hitstop, sec); };
+
+  // Перед кадром: трансформация вида (+ заливка полей, если вид не занимает окно целиком)
+  function beginDraw() {
+    const k = view.scale * view.dpr;
+    if (view.dx > 0.75 || view.dy > 0.75) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#07040a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    ctx.setTransform(k, 0, 0, k, view.dx * view.dpr, view.dy * view.dpr);
+  }
 
   let acc = 0, last = performance.now();
   game.paused = false;
@@ -64,8 +135,7 @@ export function createGame(canvas) {
       if (!game.paused) game.time += sdt;
       game.scene?.update?.(sdt, game.fixedDt);
     }
-    const s = game.scale * game.dpr;
-    ctx.setTransform(s, 0, 0, s, 0, 0);
+    beginDraw();
     game.scene?.draw?.(ctx, acc / game.fixedDt);
   }
   requestAnimationFrame(frame);
@@ -78,9 +148,9 @@ export function createGame(canvas) {
       game.time += sdt;
       game.scene?.update?.(sdt, game.fixedDt);
     }
-    const s = game.scale * game.dpr;
-    ctx.setTransform(s, 0, 0, s, 0, 0);
+    beginDraw();
     game.scene?.draw?.(ctx, 0);
   };
+  game.resize = resize;
   return game;
 }

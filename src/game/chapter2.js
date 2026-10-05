@@ -6,6 +6,7 @@ import { sfx } from '../engine/audio.js';
 import { drawDrop } from '../art/sprites.js';
 import { drawVec } from '../art/vec.js';
 import { GROUND, ARENA } from './player.js';
+import { view } from '../engine/core.js';
 
 let BLOAT = null;
 import('../art/vec/bloat.js').then(m => { BLOAT = m.default; });
@@ -15,8 +16,8 @@ const potential = s => s >= BLOAT_SIZES.length ? 0 : BLOAT_SIZES[s].hp + 2 * pot
 export const BLOAT_TOTAL = potential(0);
 
 export function initExtra(e, o) {
-  if (e.type === 'crier') { e.hoverY = rand(80, 150); e.state = 'enter'; e.vy = 120; e.shootT = rand(1, 2); e.life = 0; e.dir = Math.random() < 0.5 ? -1 : 1; }
-  if (e.type === 'spazm') { e.y = GROUND - e.r; e.dir = e.x < 480 ? 1 : -1; e.vx = 170 * e.dir; e.vy = 0; e.hopT = rand(0.4, 0.9); e.life = 0; }
+  if (e.type === 'crier') { e.hoverY = ARENA.sky + rand(80, 150); e.state = 'enter'; e.vy = 120; e.shootT = rand(1, 2); e.life = 0; e.dir = Math.random() < 0.5 ? -1 : 1; }
+  if (e.type === 'spazm') { e.y = GROUND - e.r; e.dir = e.x < view.W / 2 ? 1 : -1; e.vx = (o.hop ? 170 : 150) * e.dir; e.vy = 0; e.hop = !!o.hop; e.hopT = e.hop ? rand(0.7, 1.3) : 1e9; e.life = 0; }   // обычный Спазмик катится по полу; прыгун (hop) ещё и подскакивает
   if (e.type === 'bloat') {
     const S = BLOAT_SIZES[e.size = o.size ?? 0];
     e.r0 = S.r; e.r = S.r; e.hp = e.maxHp = S.hp; e.bounceH = S.bounce; e.vx = o.vx ?? S.vx * (Math.random() < 0.5 ? -1 : 1); e.vy = o.vy ?? 0;
@@ -30,7 +31,7 @@ export function updateExtra(G, e, dt, k) {
       e.life += dt;
       if (e.state === 'enter') { e.y += e.vy * k * dt; if (e.y >= e.hoverY) { e.state = 'hover'; e.vy = 0; } }
       else if (e.state === 'hover') {
-        e.x += e.dir * 40 * k * dt; if (e.x < 80 || e.x > 880) e.dir *= -1;
+        e.x += e.dir * 40 * k * dt; if (e.x < 80 || e.x > view.W - 80) e.dir *= -1;
         e.shootT -= dt * k;
         if (e.shootT <= 0) { e.shootT = 2.2; G.foes.push({ kind: 'tear', x: e.x + rand(-6, 6), y: e.y + e.r, vx: 0, vy: 120, r: 6, hp: 1 }); sfx('pickup', { pitch: 0.6, vol: 0.4 }); }
         if (e.life > 9) e.state = 'sink';
@@ -39,9 +40,9 @@ export function updateExtra(G, e, dt, k) {
     }
     case 'spazm': {
       e.life += dt; e.vy += 1400 * dt; e.x += e.vx * k * dt; e.y += e.vy * k * dt;
-      if (e.y >= GROUND - e.r) { e.y = GROUND - e.r; e.vy = 0; e.hopT -= dt; if (e.hopT <= 0) { e.hopT = rand(0.5, 1); e.vy = -rand(220, 380); } }
-      if (e.x < ARENA.left + e.r) { e.dir = 1; e.vx = 170; } if (e.x > ARENA.right - e.r) { e.dir = -1; e.vx = -170; }
-      if (e.life > 14) { e.vx = e.dir * 260; if (e.x < -30 || e.x > 990) e.dead = true; }
+      if (e.y >= GROUND - e.r) { e.y = GROUND - e.r; e.vy = 0; e.hopT -= dt; if (e.hopT <= 0) { e.hopT = rand(0.8, 1.5); e.vy = -rand(220, 340); } }
+      { const sp = e.hop ? 170 : 150; if (e.x < ARENA.left + e.r) { e.dir = 1; e.vx = sp; } if (e.x > ARENA.right - e.r) { e.dir = -1; e.vx = -sp; } }
+      if (e.life > (e.hop ? 14 : 10)) { e.vx = e.dir * 260; if (e.x < -30 || e.x > view.W + 30) e.dead = true; }
       break;
     }
     case 'bloat': {
@@ -85,10 +86,12 @@ export function drawExtra(G, ctx, e) {
       ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(Math.sin(e.t * 20) * 0.15);
       ctx.beginPath();
       for (let i = 0; i < 18; i++) { const a = i / 18 * TAU, rr = e.r * (i % 2 ? 0.72 : 1.18 + 0.1 * Math.sin(e.t * 30 + i)); i ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); }
-      ctx.closePath(); ctx.fillStyle = hit ? '#fff' : '#d81b3c'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#4a0412'; ctx.stroke();
+      ctx.closePath(); ctx.fillStyle = hit ? '#fff' : e.hop ? '#ff8a1a' : '#d81b3c'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = e.hop ? '#5a2a00' : '#4a0412'; ctx.stroke();
       ctx.fillStyle = '#ffd400'; ctx.beginPath(); ctx.moveTo(-3, -e.r * 0.7); ctx.lineTo(4, -2); ctx.lineTo(-1, -1); ctx.lineTo(3, e.r * 0.6); ctx.lineTo(-5, 1); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
       for (const s of [-1, 1]) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s * e.r * 0.38, -e.r * 0.15, e.r * 0.22, 0, TAU); ctx.fill(); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(s * e.r * 0.38 + e.dir * 1.5, -e.r * 0.12, e.r * 0.1, 0, TAU); ctx.fill(); }
-      ctx.restore(); break;
+      ctx.restore();
+      if (e.hop) { ctx.fillStyle = '#ffe066'; ctx.strokeStyle = '#3a1a06'; ctx.lineWidth = 2; const ay = e.y - e.r - 14 - Math.abs(Math.sin(e.t * 6)) * 4; ctx.beginPath(); ctx.moveTo(e.x, ay - 8); ctx.lineTo(e.x + 7, ay + 2); ctx.lineTo(e.x + 2.5, ay + 2); ctx.lineTo(e.x + 2.5, ay + 8); ctx.lineTo(e.x - 2.5, ay + 8); ctx.lineTo(e.x - 2.5, ay + 2); ctx.lineTo(e.x - 7, ay + 2); ctx.closePath(); ctx.fill(); ctx.stroke(); }   // стрелка вверх: подпрыгивает
+      break;
     }
     case 'bloat': {
       const sq = e.squash > 0 ? e.squash / 0.14 : 0;
@@ -116,7 +119,7 @@ export function updateFoes(G, dt) {
     if (f.kind === 'tear') f.vy += 300 * dt; else f.vy += 120 * dt;
     f.x += f.vx * dt; f.y += f.vy * dt;
     if (f.y > GROUND - 2) { f.dead = true; G.parts.burst(f.x, GROUND - 2, 4, { color: f.kind === 'tear' ? '#8fe0ff' : '#ffd36b', speed: [40, 120], g: 400, angle: -Math.PI / 2, spread: 1, life: [0.2, 0.35], size: [1.5, 3] }); continue; }
-    if (f.x < -20 || f.x > 980) { f.dead = true; continue; }
+    if (f.x < -20 || f.x > view.W + 20) { f.dead = true; continue; }
     if (!p.dead && Math.abs(f.x - p.x) < 16 + f.r && f.y > p.y - 90 && f.y < p.y) { f.dead = true; G.hurtPlayer(f.kind === 'tear' ? 'Слеза плаксы' : 'Семечко Вздутия'); }
   }
 }

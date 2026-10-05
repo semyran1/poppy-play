@@ -10,7 +10,8 @@ const LOADERS = {
   castle: () => import('./vec/castle2.js'), gothic: () => import('./vec/gothic2.js'), restroom: () => import('./vec/gothic2.js'),
   sunset: () => import('./vec/sunset.js'), finale: () => import('./vec/finale2.js'), dead: () => import('./vec/dead2.js'),
   victory: () => import('./vec/victory2.js'), facade2: () => import('./vec/facade2.js'), lair: () => import('./vec/lair2.js'),
-  crush: () => import('./vec/crush2.js'), crushFace: () => import('./vec/crushFace.js'),   // Краш v2: вампир в стиле героини crushRun: () => import('./vec/crushRun.js'), ruda: () => import('./vec/ruda.js'),
+  crush: () => import('./vec/crush2.js'), crushFace: () => import('./vec/crushFace.js'),   // Краш v2: вампир в стиле героини
+  crushRun: () => import('./vec/crushRun.js'), ruda: () => import('./vec/ruda.js'),   // (раньше склеены в одну строку-комментарий: Руда и бегущий Краш не грузились)
 };
 const DATA = {}, PENDING = {};
 export function preload(names) {

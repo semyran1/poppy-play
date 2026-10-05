@@ -9,6 +9,7 @@ import { sfx } from '../engine/audio.js';
 import { drawTentacle } from '../art/icons.js';
 import { makeEnemy } from './enemies.js';
 import { GROUND, ARENA } from './player.js';
+import { view } from '../engine/core.js';
 
 const JET_H = 372;           // высота струи фонтанчика (вершина у y ≈ 110)
 const INK = '#14060f';
@@ -56,7 +57,7 @@ export function initC3(e, o) {
     e.jets = o.jets ?? 2; e.w = 42; e.top = GROUND; e.vy = 0; e.placed = !!o.placed;
   }
   if (e.type === 'ghost') { e.baseX = e.x; e.mood = 'pink'; e.moodT = rand(1.6, 2.4); e.swapT = 0; }
-  if (e.type === 'craving') { e.state = 'enter'; e.st = 0; e.hoverY = rand(92, 140); e.vy = 150; e.loot = 0; e.cycles = 0; e.flap = rand(TAU); e.onKill = cravingKill; }
+  if (e.type === 'craving') { e.state = 'enter'; e.st = 0; e.hoverY = ARENA.sky + rand(92, 140); e.vy = 150; e.loot = 0; e.cycles = 0; e.flap = rand(TAU); e.onKill = cravingKill; }
 }
 
 function cravingKill(G, e) {
@@ -73,9 +74,9 @@ export function updateC3(G, e, dt, k) {
     case 'spout': {
       e.st += dt * k;
       if (e.state === 'wait') {
-        if (!e.placed && Math.random() < 0.6) e.x = clamp(p.x + rand(-130, 130), 70, 890);
+        if (!e.placed && Math.random() < 0.6) e.x = clamp(p.x + rand(-130, 130), 70, view.W - 70);
         // не ставим два фонтанчика вплотную
-        for (const f of G.enemies) if (f !== e && f.type === 'spout' && Math.abs(f.x - e.x) < 70) e.x = clamp(e.x + (e.x < 480 ? 110 : -110), 70, 890);
+        for (const f of G.enemies) if (f !== e && f.type === 'spout' && Math.abs(f.x - e.x) < 70) e.x = clamp(e.x + (e.x < view.W / 2 ? 110 : -110), 70, view.W - 70);
         e.state = 'bubble'; e.st = 0; sfx('splash', { pitch: 0.5, vol: 0.25 });
       } else if (e.state === 'bubble') {
         if (Math.random() < dt * 14) G.parts.spawn({ x: e.x + rand(-16, 16), y: GROUND - 2, vy: -rand(30, 70), life: 0.5, size: rand(2.5, 5), color: 'rgba(190,240,255,0.9)', shape: 'ring' });
@@ -302,7 +303,7 @@ export function updateOwnFoes(G, dt) {
       }
       case 'letter': {
         // строй: каждая буква держит своё смещение ox от Поппи, дрейф ограничен — слово остаётся читаемым
-        const tx = clamp(p.x + (f.ox || 0), 30, 930), d = tx - f.x;
+        const tx = clamp(p.x + (f.ox || 0), 30, view.W - 30), d = tx - f.x;
         f.vx = clamp(d * 1.5, -(f.drift || 42), f.drift || 42);
         f.vy += ((f.spd || 110) - f.vy) * Math.min(1, dt * 2);
         f.rot = Math.sin(f.t * 3 + (f.ox || 0)) * 0.12;
@@ -317,7 +318,7 @@ export function updateOwnFoes(G, dt) {
       G.parts.burst(f.x, GROUND - 3, 6, { color: col, speed: [50, 150], g: 500, angle: -Math.PI / 2, spread: 1.1, life: [0.2, 0.4], size: [2, 4], shape: 'drop' });
       continue;
     }
-    if (f.x < -40 || f.x > 1000 || f.y < -200) { f.dead = true; continue; }
+    if (f.x < -40 || f.x > view.W + 40 || f.y < -200) { f.dead = true; continue; }
     if (!p.dead && Math.abs(f.x - p.x) < 15 + f.r * 0.8 && f.y + f.r * 0.6 > p.y - 90 && f.y - f.r * 0.6 < p.y) { f.dead = true; G.hurtPlayer(f.why); }
   }
 }
@@ -372,17 +373,17 @@ export function drawOwnFoes(G, ctx) {
 // Опасности боссов (общие для Королевы и Руды): удары-колонны, волны по полу, дождь с просветами
 // ======================================================================================
 // колонна: kind 'pillar' (огонь) | 'tentacle' (щупальце Мисс Спазм); t < warn — подсказка
-export function addSlam(b, kind, x, delay = 0, warn = 1.0) { b.slams.push({ kind, x: clamp(x, 60, 900), t: -delay, warn, dur: kind === 'tentacle' ? 0.5 : 0.4, w: kind === 'tentacle' ? 64 : 58 }); }
+export function addSlam(b, kind, x, delay = 0, warn = 1.0) { b.slams.push({ kind, x: clamp(x, 60, view.W - 60), t: -delay, warn, dur: kind === 'tentacle' ? 0.5 : 0.4, w: kind === 'tentacle' ? 64 : 58 }); }
 export function addWaves(b, x, speed = 300, color = 'fire') { for (const s of [-1, 1]) b.waves.push({ x: x + s * 10, v: s * speed, t: 0, color }); }
 export function startRain(b, o = {}) {
   const gapW = o.gapW ?? 130, n = o.gaps ?? 2, gaps = [];
   // просветы не у самого края и не друг на друге
   for (let tries = 0; gaps.length < n && tries < 40; tries++) {
-    const c = rand(110 + gapW / 2, 850 - gapW / 2);
+    const c = rand(110 + gapW / 2, view.W - 110 - gapW / 2);
     if (gaps.every(g => Math.abs(g.c - c) > gapW + 90)) gaps.push({ c, x0: c - gapW / 2, x1: c + gapW / 2 });
   }
   const cols = [], step = o.step ?? 46;
-  for (let x = 58; x <= 902; x += step) if (gaps.every(g => x < g.x0 - 14 || x > g.x1 + 14)) cols.push({ x, times: Array.from({ length: o.per ?? 2 }, () => rand(0, o.dur ?? 2.3)).sort((a, b) => a - b) });
+  for (let x = 58; x <= view.W - 58; x += step) if (gaps.every(g => x < g.x0 - 14 || x > g.x1 + 14)) cols.push({ x, times: Array.from({ length: o.per ?? 2 }, () => rand(0, o.dur ?? 2.3)).sort((a, b) => a - b) });
   b.rain = { t: 0, warn: o.warn ?? 1.1, dur: o.dur ?? 2.3, gaps, cols, light: !!o.light };
 }
 
@@ -409,7 +410,7 @@ export function updateHazards(G, b, dt) {
   const R = b.rain;
   if (R) {
     R.t += dt; const k = R.t - R.warn;
-    if (k >= 0) for (const c of R.cols) while (c.times.length && c.times[0] <= k) { c.times.shift(); spawnFoe(G, 'tear', c.x + rand(-5, 5), 100, { vy: 120, r: R.light ? 12 : 13 }); }
+    if (k >= 0) for (const c of R.cols) while (c.times.length && c.times[0] <= k) { c.times.shift(); spawnFoe(G, 'tear', c.x + rand(-5, 5), ARENA.sky + 100, { vy: 120, r: R.light ? 12 : 13 }); }
     if (k > R.dur + 0.2) b.rain = null;
   }
 }
@@ -460,22 +461,23 @@ export function drawHazards(G, ctx, b) {
   // дождь: подсказка — тучи над зонами дождя и светлые «сухие» коридоры
   const R = b.rain;
   if (R) {
+    const RT = 96 + ARENA.sky;   // верх тучи (на высоком виде опущен)
     const k = clamp(R.t / R.warn, 0, 1), on = R.t >= R.warn, a = on ? clamp(1 - (R.t - R.warn - R.dur) / 0.4, 0, 1) : k;
     ctx.save(); ctx.globalAlpha = a;
     // зоны дождя
     let x = 40; const zones = [];
-    for (const g of [...R.gaps].sort((p, q) => p.x0 - q.x0)) { zones.push([x, g.x0]); x = g.x1; } zones.push([x, 920]);
+    for (const g of [...R.gaps].sort((p, q) => p.x0 - q.x0)) { zones.push([x, g.x0]); x = g.x1; } zones.push([x, view.W - 40]);
     for (const [x0, x1] of zones) {
-      ctx.fillStyle = `rgba(70,140,235,${on ? 0.12 : 0.08 + 0.14 * k * (Math.sin(R.t * 18) > 0 ? 1 : 0.6)})`; ctx.fillRect(x0, 96, x1 - x0, GROUND - 96);
+      ctx.fillStyle = `rgba(70,140,235,${on ? 0.12 : 0.08 + 0.14 * k * (Math.sin(R.t * 18) > 0 ? 1 : 0.6)})`; ctx.fillRect(x0, RT, x1 - x0, GROUND - RT);
       ctx.fillStyle = '#34507e'; ctx.strokeStyle = '#0e1a33'; ctx.lineWidth = 3;
-      for (let cx = x0 + 22; cx < x1 - 10; cx += 44) { ctx.beginPath(); ctx.arc(cx, 96 + Math.sin(cx + t * 2) * 3, 20, 0, TAU); ctx.fill(); ctx.stroke(); }
-      ctx.fillStyle = '#34507e'; ctx.fillRect(x0 + 4, 92, Math.max(0, x1 - x0 - 8), 14);
+      for (let cx = x0 + 22; cx < x1 - 10; cx += 44) { ctx.beginPath(); ctx.arc(cx, RT + Math.sin(cx + t * 2) * 3, 20, 0, TAU); ctx.fill(); ctx.stroke(); }
+      ctx.fillStyle = '#34507e'; ctx.fillRect(x0 + 4, RT - 4, Math.max(0, x1 - x0 - 8), 14);
     }
     // просветы
     for (const g of R.gaps) {
-      ctx.fillStyle = 'rgba(255,250,220,0.10)'; ctx.fillRect(g.x0, 96, g.x1 - g.x0, GROUND - 96);
+      ctx.fillStyle = 'rgba(255,250,220,0.10)'; ctx.fillRect(g.x0, RT, g.x1 - g.x0, GROUND - RT);
       ctx.setLineDash([10, 8]); ctx.lineDashOffset = -t * 40; ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,250,220,0.65)';
-      ctx.beginPath(); ctx.moveTo(g.x0, 96); ctx.lineTo(g.x0, GROUND); ctx.moveTo(g.x1, 96); ctx.lineTo(g.x1, GROUND); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(g.x0, RT); ctx.lineTo(g.x0, GROUND); ctx.moveTo(g.x1, RT); ctx.lineTo(g.x1, GROUND); ctx.stroke(); ctx.setLineDash([]);
       // стрелки «сюда»
       for (let i = 0; i < 2; i++) {
         const yy = GROUND - 70 - i * 26 + ((t * 40) % 26);
@@ -499,7 +501,7 @@ const Q_ATT = { 1: ['slam', 'fire', 'slam2', 'fire'], 2: ['rain', 'fan', 'slam',
 
 export function makeQueen() {
   return {
-    id: 'queen', name: 'Королева ПМС', intro: 'Три маски — три настроения', x: 480, y: -220, r: 66, s: 1,
+    id: 'queen', name: 'Королева ПМС', intro: 'Три маски — три настроения', x: view.W / 2, y: -220, r: 66, s: 1,
     hp: 12000, maxHp: 12000, phase: 1, t: 0, st: 0, hitT: 0, invuln: 0, state: 'enter', last: null,
     eyeT: 0, dark: 0, slams: [], waves: [], rain: null, maskT: 0, arm: 0, box: 0, cast: 0,
     lines: { 2: 'Не смотри на меня! Я… я не плачу!', 3: 'Хочу сладкого. СЕЙЧАС ЖЕ!' },
@@ -517,20 +519,20 @@ function updateQueen(G, b, dt) {
     b.phase = ph; b.maskT = 1.2; b.invuln = 1.2; b.state = 'idle'; b.st = 0; b.arm = 0; b.box = 0; b.cast = 0;
     G.freeze(0.12); G.shake(0.6); sfx('boom', { pitch: 1.6, vol: 0.5 }); sfx('bossHit', { pitch: 0.6 });
     G.parts.burst(b.x, b.y - 30, 26, { color: [old.base, old.hi, '#fff'], speed: [120, 340], g: 600, life: [0.5, 1], shape: 'rect', size: [3, 7] });
-    G.floaters.add(480, 300, `Маска «${MASKS[ph - 1].name}»!`, { size: 30, color: MASKS[ph - 1].hi, life: 1.6, vy: -30 });
+    G.floaters.add(view.W / 2, view.H * 0.55, `Маска «${MASKS[ph - 1].name}»!`, { size: 30, color: MASKS[ph - 1].hi, life: 1.6, vy: -30 });
     b.say = { s: b.lines[ph], t: 0 };
   }
   if (b.say) { b.say.t += dt; if (b.say.t > 2.4) b.say = null; }
   if (b.state === 'enter') {
-    b.y += (170 - b.y) * Math.min(1, dt * 2.4);
+    b.y += (ARENA.sky + 170 - b.y) * Math.min(1, dt * 2.4);
     if (b.st > 1.6) { b.state = 'idle'; b.st = 0; b.say = { s: 'На колени перед Королевой!', t: 0 }; }
     return;
   }
   // парит над Поппи, но не прилипает
-  const tx = clamp(G.p.x + Math.sin(b.t * 0.6) * 190, 170, 790);
+  const tx = clamp(G.p.x + Math.sin(b.t * 0.6) * 190, 170, view.W - 170);
   const still = b.state === 'slam' || b.state === 'slam2';
   b.x += (tx - b.x) * Math.min(1, dt * (still ? 0.15 : 0.7));
-  b.y += ((still && b.st < 1 ? 150 : 170) + Math.sin(b.t * 1.5) * 8 - b.y) * Math.min(1, dt * 3);
+  b.y += (ARENA.sky + (still && b.st < 1 ? 150 : 170) + Math.sin(b.t * 1.5) * 8 - b.y) * Math.min(1, dt * 3);
   b.arm += ((b.cast > 0 ? 1 : 0) - b.arm) * Math.min(1, dt * 10);
   b.box += ((b.state === 'sweets' && b.st < 1.0 ? 1 : 0) - b.box) * Math.min(1, dt * 8);
   b.eyeT = Math.max(0, b.eyeT - dt);
@@ -543,7 +545,9 @@ function updateQueen(G, b, dt) {
       if (a === 'slam' || a === 'slam2') { b.cast = 1; b.slamX = b.x; sfx('zap', { pitch: 0.35 }); if (!b.waveHint) { b.waveHint = true; G.say('Волна по полу — перепрыгни!', '#fff'); } }
       if (a === 'fire') {
         const n = b.phase === 1 ? 3 : 2, xs = [G.p.x];
-        while (xs.length < n) { const x = rand(80, 880); if (xs.every(q => Math.abs(q - x) > 150)) xs.push(x); }
+        const sp = Math.min(150, (view.W - 160) / n);   // на узкой арене (портрет) столбы ближе друг к другу; число попыток ограничено
+        for (let tries = 0; xs.length < n && tries < 60; tries++) { const x = rand(80, view.W - 80); if (xs.every(q => Math.abs(q - x) > sp)) xs.push(x); }
+        while (xs.length < n) xs.push(rand(80, view.W - 80));
         xs.forEach((x, i) => addSlam(b, 'pillar', x, i * 0.28, 1.0)); b.cast = 1; sfx('zap', { pitch: 0.5 });
       }
       if (a === 'rain') { startRain(b, { gaps: 2, gapW: b.phase === 2 ? 140 : 130, dur: 2.3, per: 2 }); b.say = b.say || { s: 'Все меня бросили!..', t: 0 }; sfx('whoosh', { pitch: 0.4 }); }
@@ -582,7 +586,7 @@ function updateQueen(G, b, dt) {
     }
     if (b.st > 2.0) { b.state = 'idle'; b.st = 0; }
   } else if (b.state === 'summon') {
-    if (!b.done) { b.done = 1; G.enemies.push(makeEnemy('craving', clamp(b.x - 160, 80, 880), -30, G.waveIndex)); G.enemies.push(makeEnemy('craving', clamp(b.x + 160, 80, 880), -30, G.waveIndex)); for (let i = 0; i < 3; i++) G.enemies.push(makeEnemy('droplet', b.x + rand(-80, 80), b.y + 60, G.waveIndex)); sfx('pop', { pitch: 0.6 }); b.say = { s: 'Принесите мне сладкого!', t: 0 }; }
+    if (!b.done) { b.done = 1; G.enemies.push(makeEnemy('craving', clamp(b.x - 160, 80, view.W - 80), -30, G.waveIndex)); G.enemies.push(makeEnemy('craving', clamp(b.x + 160, 80, view.W - 80), -30, G.waveIndex)); for (let i = 0; i < 3; i++) G.enemies.push(makeEnemy('droplet', b.x + rand(-80, 80), b.y + 60, G.waveIndex)); sfx('pop', { pitch: 0.6 }); b.say = { s: 'Принесите мне сладкого!', t: 0 }; }
     if (b.st > 1.3) { b.state = 'idle'; b.st = 0; }
   }
   b.strikeT = Math.max(0, (b.strikeT || 0) - dt);
@@ -725,8 +729,8 @@ function drawQueen(G, ctx, b) {
     const a = b.say.t < 0.15 ? b.say.t / 0.15 : b.say.t > 2.1 ? (2.4 - b.say.t) / 0.3 : 1;
     ctx.save(); ctx.globalAlpha = clamp(a, 0, 1);
     // сбоку от королевы, где больше места (не налезает на полосу HP)
-    ctx.font = '900 17px Nunito, sans-serif'; const w = ctx.measureText(b.say.s).width + 28, side = x < 480 ? 1 : -1;
-    const bx = clamp(x + side * (w / 2 + 96), w / 2 + 10, 950 - w / 2), by = y - 50;
+    ctx.font = '900 17px Nunito, sans-serif'; const w = ctx.measureText(b.say.s).width + 28, side = x < view.W / 2 ? 1 : -1;
+    const bx = clamp(x + side * (w / 2 + 96), w / 2 + 10, view.W - 10 - w / 2), by = y - 50;
     ctx.fillStyle = '#fff4fa'; ctx.beginPath(); ctx.moveTo(bx - side * (w / 2 - 6), by + 6); ctx.lineTo(x + side * 60, by + 22); ctx.lineTo(bx - side * (w / 2 - 6), by - 8); ctx.fill();
     ctx.beginPath(); ctx.roundRect(bx - w / 2, by - 17, w, 34, 14); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = M.rim; ctx.stroke();
     ctx.fillStyle = M.rim; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(b.say.s, bx, by + 1);
@@ -737,7 +741,7 @@ function drawQueen(G, ctx, b) {
 // ======================================================================================
 // Эмбиент готики: капли с потолка и мерцание ламп (поверх векторного фона)
 // ======================================================================================
-const drips = Array.from({ length: 10 }, () => ({ x: 60 + Math.random() * 840, y: Math.random() * 480, v: 160 + Math.random() * 120 }));
+const drips = Array.from({ length: 10 }, () => ({ x: 60 + Math.random() * 840, y: Math.random() * 480, v: 160 + Math.random() * 120 }));   // координаты фона 960×540: рисуется в пространстве фона (play.js bgSpace)
 let lastAmbT = 0;
 export function drawGothicAmbient(ctx, t) {
   const dt = Math.min(0.05, Math.max(0, t - lastAmbT)); lastAmbT = t;

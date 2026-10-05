@@ -194,7 +194,8 @@ export const ENEMIES = {
   popcorn: { r: 9, hp: 6, spd: 150, count: 0, floor: 0, xp: 0, cost: 0, dmg: 1 },
   // глава 2 «Улица»
   crier:   { r: 18, hp: 34, spd: 0, count: 1, floor: 2, xp: 4, cost: 4, dmg: 1 },   // Капля-плакса: висит и роняет слёзы
-  spazm:   { r: 15, hp: 40, spd: 0, count: 0, floor: 0, xp: 4, cost: 5, dmg: 1 },   // Спазмик: зигзаг по полу
+  spazm:   { r: 15, hp: 40, spd: 0, count: 0, floor: 0, xp: 4, cost: 5, dmg: 1 },   // Спазмик: катится по полу (перепрыгивается). ТОЛЬКО со 2-й главы
+  spazmj:  { base: 'spazm', hop: true, r: 15, hp: 40, spd: 0, count: 0, floor: 0, xp: 5, cost: 7, dmg: 1 },   // Спазмик-прыгун: катится и подскакивает; позже и реже (с волны 4 главы 2)
   bloat:   { r: 80, hp: 2600, spd: 0, count: 0, floor: 0, xp: 12, cost: 0, dmg: 1 }, // Великое Вздутие (босс-томат)
   // глава 3 «Готика» (src/game/chapter3.js)
   spout:   { r: 0, hp: 1, spd: 0, count: 0, floor: 0, xp: 0, cost: 3, dmg: 1 },     // Фонтанчик: пузырьки 1 с → струя из пола
@@ -206,21 +207,24 @@ export const ENEMIES = {
 // mix — веса типов, budget — бюджет угрозы в секунду (режиссёр), counter — стартовое значение счётчика
 export const CHAPTERS = [
   {
+    // Глава 1 «Кинотеатр»: ТОЛЬКО капли сверху (капля, капелька, пикирующая, облако) — ничего, что катится или прыгает по полу
+    // (Спазмик и желе начинаются со 2-й главы). soft — «мягкий вход»: первые t секунд волны только медленные капли и меньше потока,
+    // потом плавно (за 8 с) обычный режим. leak — во сколько раз счётчик должен вырасти, чтобы случилась «Протечка» (по умолчанию 1,5).
     id: 'cinema', name: 'Кинотеатр', bg: 'cinema', boss: 'spasm',
     waves: [
-      { counter: 30, budget: 0.9, mix: { droplet: 6, drop: 2 }, intro: 'droplet', hint: 'Сбивай капли, пока они не упали на пол!' },
-      { counter: 42, budget: 1.25, mix: { droplet: 5, drop: 3, diver: 2 }, intro: 'diver', hint: 'Эти пикируют! Отпрыгни вбок.' },
-      { counter: 54, budget: 1.6, mix: { droplet: 4, drop: 3, diver: 2, jelly: 1, spazm: 1 }, intro: 'jelly', hint: 'Желе прыгает и делится. Бей, пока маленькое!' },
-      { counter: 66, budget: 1.95, mix: { droplet: 4, drop: 3, diver: 3, jelly: 1, fart: 1, spazm: 1 }, intro: 'fart', hint: 'Облако нельзя пускать к полу: +10!' },
+      { counter: 24, budget: 0.72, leak: 2.2, soft: { t: 30, mix: { droplet: 1 }, k: 0.55, spd: 0.76 }, mix: { droplet: 7, drop: 2 }, intro: 'droplet', hint: 'Сбивай капли, пока они не упали на пол!' },
+      { counter: 38, budget: 1.0, leak: 1.8, soft: { t: 10, mix: { droplet: 5, drop: 1 }, k: 0.8, spd: 0.92 }, mix: { droplet: 5, drop: 3, diver: 1 }, intro: 'diver', hint: 'Эти пикируют! Отпрыгни вбок.' },
+      { counter: 52, budget: 1.65, mix: { droplet: 4, drop: 3, diver: 3 }, intro: 'drop', hint: 'Капли покрупнее: расколешь — разлетятся на две!' },
+      { counter: 62, budget: 1.65, mix: { droplet: 4, drop: 3, diver: 2, fart: 1 }, intro: 'fart', hint: 'Облако нельзя пускать к полу: +10!' },
     ],
   },
   {
     id: 'street', name: 'Улица', bg: 'street', boss: 'bloat',
     waves: [
       { counter: 44, budget: 1.45, mix: { droplet: 5, drop: 3, diver: 2, crier: 2 }, intro: 'crier', hint: 'Плаксы роняют слёзы — сбивай их на лету!' },
-      { counter: 56, budget: 1.8, mix: { droplet: 4, drop: 3, diver: 2, crier: 2, spazm: 2 }, intro: 'spazm', hint: 'Спазмик носится по полу — перепрыгни!' },
-      { counter: 68, budget: 2.15, mix: { droplet: 4, drop: 3, diver: 3, crier: 2, spazm: 2, jelly: 1 }, intro: 'jelly', hint: 'Большое желе! Дели его, пока не поздно.' },
-      { counter: 80, budget: 2.5, mix: { droplet: 4, drop: 3, diver: 3, crier: 2, spazm: 2, jelly: 1, fart: 1 }, intro: 'fart', hint: 'Всё и сразу. Держись, Поппи!' },
+      { counter: 56, budget: 1.75, mix: { droplet: 4, drop: 3, diver: 2, crier: 2, spazm: 1 }, intro: 'spazm', hint: 'Это Спазмик: катится по полу и врезается. Перепрыгни!' },
+      { counter: 68, budget: 2.1, mix: { droplet: 4, drop: 3, diver: 3, crier: 2, spazm: 1.5, jelly: 1 }, intro: 'jelly', hint: 'Большое желе! Дели его, пока не поздно.' },
+      { counter: 80, budget: 2.45, mix: { droplet: 4, drop: 3, diver: 3, crier: 2, spazm: 1.5, spazmj: 0.7, jelly: 1, fart: 1 }, intro: 'spazmj', hint: 'Этот Спазмик ещё и подпрыгивает! Не лезь под него.' },
     ],
   },
   {
@@ -240,6 +244,16 @@ export const CHAPTERS = [
     ],
   },
 ];
+
+// ---------- Сенсорная помощь (телефон) ----------
+// Включается сама, когда играют пальцем (app.inp.isTouch): палец закрывает экран и точность ниже, чем у клавиатуры.
+// Игроку не показывается («режима лёгкий» нет). Применяется в одном месте: play.js, G.A = assistFor(inp) в начале шага мира.
+// enemyTime — «время врагов» (скорость падения/полёта врагов и их снарядов, и темп спавна волны), iframes — окно неуязвимости
+// после удара (с), hit — множитель радиуса касания врага с Поппи (прощение), bossTempo — темп атак босса (медленнее = больше времени
+// на реакцию; урон снаряда всё равно одно сердце).
+export const TOUCH_ASSIST = { enemyTime: 0.9, iframes: 1.15, hit: 0.84, bossTempo: 0.92 };
+export const NO_ASSIST = { enemyTime: 1, iframes: 0.8, hit: 1, bossTempo: 1 };
+export const assistFor = (inp) => (inp && inp.isTouch ? TOUCH_ASSIST : NO_ASSIST);
 
 // ---------- Опыт ----------
 export function xpToNext(level) {
@@ -273,6 +287,7 @@ export const DEFAULT_SAVE = {
   best: { chapter: 0, combo: 0, level: 0 },
   settings: { sfx: 0.8, music: 0.45, shake: 0.8, numbers: true },
   seenIntro: false,
+  firstDeathGift: false,    // «Утешительный приз» за первую смерть уже выдан (meta.js, consolation)
   outfit: 'lara',
   facing: 'front',       // поза в бою: 'front' — лицом (вполоборота), 'back' — спиной к нам, бластер вверх
   progress: 0,           // следующая доступная глава (контрольная точка)
