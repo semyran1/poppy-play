@@ -521,7 +521,7 @@ export function createStory(app, key, onDone) {
   }
   function finish() { if (done) return; done = true; inp.endStep(); onDone(); }
   const skipRect = () => VP.portrait ? portLay().skip : SB;
-  const inBtn = (x, y) => { const b = skipRect(), m = VP.portrait ? 8 : 0; return x > b.x - m && x < b.x + b.w + m && y > b.y - m && y < b.y + b.h + m; };   // на тач-экране — с запасом
+  const inBtn = (x, y) => { const b = skipRect(), k = (VP.scale * (VP.portrait ? 1 : VP.frame.s)) || 1, m = Math.min(12 / k, Math.max(VP.portrait ? 8 : 0, (44 / k - b.h) / 2)); return x > b.x - m && x < b.x + b.w + m && y > b.y - m && y < b.y + b.h + m; };   // на тач-экране — с запасом
 
   // --- атмосфера: частицы ---
   function ambient(dt) {

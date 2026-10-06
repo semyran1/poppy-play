@@ -11,16 +11,30 @@ import { view } from '../engine/core.js';
 let BLOAT = null;
 import('../art/vec/bloat.js').then(m => { BLOAT = m.default; });
 
-export const BLOAT_SIZES = [{ r: 80, hp: 3400, bounce: 300, vx: 85 }, { r: 55, hp: 1450, bounce: 250, vx: 110 }, { r: 37, hp: 600, bounce: 200, vx: 135 }];
-const potential = s => s >= BLOAT_SIZES.length ? 0 : BLOAT_SIZES[s].hp + 2 * potential(s + 1);
-export const BLOAT_TOTAL = potential(0);
+export const BLOAT_SIZES = [{ r: 80, hp: 4100, bounce: 300, vx: 85 }, { r: 55, hp: 1750, bounce: 250, vx: 110 }, { r: 37, hp: 720, bounce: 200, vx: 135 }];   // HP ×1,2 к итерации 18: волны с перерывами и бонусами иначе слишком лёгкие
+// Босс — три «волны»: большой помидор → два средних → три маленьких. Между волнами перерыв ~2,6 с и микро-бонус (play.js, bloatWaveDone).
+// Раньше помидор делился сразу на месте (1 → 2 → 4); теперь после гибели каждой волны семечки и осколки исчезают, потом приходит следующая.
+export const BLOAT_WAVES = [
+  { name: 'Большой помидор', sizes: [0] },
+  { name: 'Два средних', sizes: [1, 1] },
+  { name: 'Три мелких', sizes: [2, 2, 2] },
+];
+const waveHp = w => BLOAT_WAVES[w].sizes.reduce((a, s) => a + BLOAT_SIZES[s].hp, 0);
+export const BLOAT_TOTAL = BLOAT_WAVES.reduce((a, _, i) => a + waveHp(i), 0);
+export const bloatFutureHp = w => BLOAT_WAVES.reduce((a, _, i) => a + (i > w ? waveHp(i) : 0), 0);   // HP волн после волны w
+export const BLOAT_MARKS = BLOAT_WAVES.slice(0, -1).map((_, i) => bloatFutureHp(i) / BLOAT_TOTAL);   // отметки на полосе босса: где кончается волна
+// Узкая арена (портрет, W = 540): помидор поменьше и не такой быстрый, семечек меньше и они медленнее, плевок предупреждает дольше.
+// narrow: 0 при W ≥ 960 (как раньше), 1 при W ≤ 540.
+const narrow = () => clamp((960 - view.W) / 420, 0, 1);
+export const BABAH_R = 1.4;   // радиус удара «Бабах» в радиусах помидора (было 1,7: в узком портрете накрывало две трети арены); перед взрывом вокруг рисуется красное кольцо этого радиуса
+export const bloatK = () => { const n = narrow(); return { r: 1 - 0.2 * n, vx: 1 - 0.38 * n, seed: 1 - 0.26 * n, tele: 0.7 + 0.35 * n, gap: 1 + 0.25 * n, ring: n > 0.5 ? 5 : 7 }; };
 
 export function initExtra(e, o) {
   if (e.type === 'crier') { e.hoverY = ARENA.sky + rand(80, 150); e.state = 'enter'; e.vy = 120; e.shootT = rand(1, 2); e.life = 0; e.dir = Math.random() < 0.5 ? -1 : 1; }
   if (e.type === 'spazm') { e.y = GROUND - e.r; e.dir = e.x < view.W / 2 ? 1 : -1; e.vx = (o.hop ? 170 : 150) * e.dir; e.vy = 0; e.hop = !!o.hop; e.hopT = e.hop ? rand(0.7, 1.3) : 1e9; e.life = 0; }   // обычный Спазмик катится по полу; прыгун (hop) ещё и подскакивает
   if (e.type === 'bloat') {
-    const S = BLOAT_SIZES[e.size = o.size ?? 0];
-    e.r0 = S.r; e.r = S.r; e.hp = e.maxHp = S.hp; e.bounceH = S.bounce; e.vx = o.vx ?? S.vx * (Math.random() < 0.5 ? -1 : 1); e.vy = o.vy ?? 0;
+    const S = BLOAT_SIZES[e.size = o.size ?? 0], K = bloatK();
+    e.r0 = S.r * K.r; e.r = e.r0; e.hp = e.maxHp = S.hp; e.bounceH = S.bounce; e.vx = o.vx ?? S.vx * K.vx * (Math.random() < 0.5 ? -1 : 1); e.vy = o.vy ?? 0;
     e.count = 0; e.floor = 0; e.xp = 12 - e.size * 3; e.infl = 0; e.spitT = rand(2, 4);
   }
 }
@@ -47,11 +61,12 @@ export function updateExtra(G, e, dt, k) {
     }
     case 'bloat': {
       // раздувается: +2,5% в секунду; на 1,35× — «БАБАХ»: кольцо семечек и сброс размера
+      const K = bloatK();
       e.infl += dt * 0.025; e.r = e.r0 * (1 + e.infl);
       if (e.infl > 0.35) {
         e.infl = 0; G.shake(0.5); sfx('boom', { pitch: 0.8 }); G.say('Бабах!', '#ff8a5a');
-        for (let i = 0; i < 7; i++) { const a = -Math.PI * (0.12 + 0.76 * i / 6); G.foes.push({ kind: 'seed', x: e.x, y: e.y, vx: Math.cos(a) * 200, vy: Math.sin(a) * 200, r: 9, hp: 1 }); }
-        if (Math.hypot(G.p.x - e.x, G.p.y - 50 - e.y) < e.r * 1.7) G.hurtPlayer('«Бабах» Вздутия');
+        for (let i = 0; i < K.ring; i++) { const a = -Math.PI * (0.12 + 0.76 * i / (K.ring - 1)); G.foes.push({ kind: 'seed', x: e.x, y: e.y, vx: Math.cos(a) * 200 * K.seed, vy: Math.sin(a) * 200 * K.seed, r: 9, hp: 1 }); }
+        if (Math.hypot(G.p.x - e.x, G.p.y - 50 - e.y) < e.r * BABAH_R) G.hurtPlayer('«Бабах» Вздутия', { soft: true });
       }
       e.vy += 900 * dt * k; e.x += e.vx * k * dt; e.y += e.vy * k * dt;
       if (e.y + e.r >= GROUND) { e.y = GROUND - e.r; e.vy = -Math.sqrt(2 * 900 * e.bounceH); e.squash = 0.14; sfx('thud', { pitch: 0.7 - e.size * 0.1, vol: 0.5 }); G.shake(0.06 * (3 - e.size)); }
@@ -59,13 +74,13 @@ export function updateExtra(G, e, dt, k) {
       if (e.x + e.r > ARENA.right) { e.x = ARENA.right - e.r; e.vx = -Math.abs(e.vx); }
       e.squash = Math.max(0, (e.squash || 0) - dt);
       e.spitT -= dt * k;
-      if (e.spitT <= 0.7 && !e.aim) { e.aim = { x: G.p.x, y: G.p.y - 60 }; sfx('select', { pitch: 0.5, vol: 0.3 }); }   // прицелился: видно 0,7 с
+      if (e.spitT <= K.tele && !e.aim) { e.aim = { x: G.p.x, y: G.p.y - 60 }; sfx('select', { pitch: 0.5, vol: 0.3 }); }   // прицелился: видно 0,7 с
       if (e.aim) { e.aim.x += (G.p.x - e.aim.x) * Math.min(1, dt * 3); e.aim.y = G.p.y - 60; }
       if (e.spitT <= 0) {
         const n = G.enemies.filter(f => f.type === 'bloat' && !f.dead).length;
-        e.spitT = rand(3.2, 4.8) * (e.size === 2 ? 1.6 : 1) * (n > 3 ? 1.4 : 1);
+        e.spitT = rand(3.2, 4.8) * K.gap * (e.size === 2 ? 1.6 : 1) * (n > 2 ? 1.4 : 1);   // много помидоров на арене — плюются реже
         const dx = e.aim.x - e.x, dy = e.aim.y - e.y, L = Math.hypot(dx, dy) || 1; e.aim = null;
-        G.foes.push({ kind: 'seed', x: e.x, y: e.y, vx: dx / L * 190, vy: dy / L * 190, r: 9, hp: 1 }); sfx('pop', { pitch: 0.6, vol: 0.5 });
+        G.foes.push({ kind: 'seed', x: e.x, y: e.y, vx: dx / L * 190 * K.seed, vy: dy / L * 190 * K.seed, r: 9, hp: 1 }); sfx('pop', { pitch: 0.6, vol: 0.5 });
       }
       break;
     }
@@ -100,11 +115,15 @@ export function drawExtra(G, ctx, e) {
         ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.aim.x, e.aim.y); ctx.stroke(); ctx.setLineDash([]);
         ctx.fillStyle = '#ffe066'; ctx.font = '900 22px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#3a0a06'; ctx.strokeText('!', e.x, e.y - e.r - 14); ctx.fillText('!', e.x, e.y - e.r - 14); ctx.restore();
       }
+      if (e.infl > 0.27) {   // предупреждение: красное кольцо — зона «Бабаха»
+        ctx.save(); ctx.globalAlpha = 0.4 + 0.35 * Math.abs(Math.sin(e.t * 14)); ctx.lineWidth = 3.5; ctx.strokeStyle = '#ff4a2a'; ctx.setLineDash([10, 8]); ctx.lineDashOffset = -e.t * 50;
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r * BABAH_R, 0, TAU); ctx.stroke(); ctx.fillStyle = 'rgba(255,74,42,0.07)'; ctx.fill(); ctx.restore();
+      }
       ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(e.x, GROUND + 3, e.r * 0.8, 8, 0, 0, TAU); ctx.fill();
       ctx.save(); ctx.translate(e.x, e.y + e.r * 0.25 * sq); ctx.scale(1 + 0.25 * sq, 1 - 0.25 * sq);
       if (e.infl > 0.25) ctx.translate(Math.sin(e.t * 50) * 2, 0); // дрожит перед «бабах»
       if (e.aim) { const k2 = 1 + 0.08 * Math.sin(e.t * 40); ctx.scale(k2, 1 / k2); }   // надулся перед плевком
-      if (BLOAT) { const h = e.r * 2.5, w = BLOAT.w * h / BLOAT.h; drawVec(ctx, BLOAT, -w / 2, -h * 0.62, w, h, 'bloat@' + Math.round(h / 8) * 8); }
+      if (BLOAT) { const h = e.r * 2.5, hq = Math.max(16, Math.round(h / 16) * 16), wq = BLOAT.w * hq / BLOAT.h, k = h / hq; ctx.save(); ctx.scale(k, k); drawVec(ctx, BLOAT, -wq / 2, -hq * 0.62, wq, hq, 'bloat@' + hq); ctx.restore(); }   // растровый кэш — по ступеням 16 px, плавный размер раздувания — масштабом (раньше новый холст на каждый кадр: сотни МБ за бой с боссом)
       else { ctx.fillStyle = '#d23a22'; ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill(); }
       if (hit) { ctx.globalAlpha = 0.5; ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, e.r * 0.95, 0, TAU); ctx.fill(); }
       ctx.restore(); break;
@@ -120,7 +139,7 @@ export function updateFoes(G, dt) {
     f.x += f.vx * dt; f.y += f.vy * dt;
     if (f.y > GROUND - 2) { f.dead = true; G.parts.burst(f.x, GROUND - 2, 4, { color: f.kind === 'tear' ? '#8fe0ff' : '#ffd36b', speed: [40, 120], g: 400, angle: -Math.PI / 2, spread: 1, life: [0.2, 0.35], size: [1.5, 3] }); continue; }
     if (f.x < -20 || f.x > view.W + 20) { f.dead = true; continue; }
-    if (!p.dead && Math.abs(f.x - p.x) < 16 + f.r && f.y > p.y - 90 && f.y < p.y) { f.dead = true; G.hurtPlayer(f.kind === 'tear' ? 'Слеза плаксы' : 'Семечко Вздутия'); }
+    if (!p.dead && Math.abs(f.x - p.x) < 16 + f.r && f.y > p.y - 90 && f.y < p.y) { f.dead = true; G.hurtPlayer(f.kind === 'tear' ? 'Слеза плаксы' : 'Семечко Вздутия', { soft: true }); }
   }
 }
 export function drawFoes(G, ctx) {

@@ -107,11 +107,23 @@ export class Floaters {
 // Сохранение: localStorage с try/catch (в приватном режиме может падать)
 const KEY = 'poppy2.save.v1';
 export function loadSave(def) {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); return s ? deepMerge(structuredClone(def), s) : structuredClone(def); }
-  catch { return structuredClone(def); }
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); const s = JSON.parse(raw); return isPlain(s) ? deepMerge(structuredClone(def), s) : structuredClone(def); }
+  catch { try { if (raw) localStorage.setItem(KEY + '.corrupt', raw.slice(0, 500000)); } catch { } return structuredClone(def); }   // испорченную строку не теряем: копия в poppy2.save.v1.corrupt (первая запись игры перезапишет основной ключ)
 }
 export function writeSave(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { } }
+// Слияние загруженного поверх умолчаний. Несовместимые по типу значения (null, число вместо объекта, массив вместо объекта, строка вместо числа, NaN)
+// игнорируются — остаётся умолчание; ключи __proto__ / constructor / prototype пропускаются (иначе сейв мог бы загрязнить Object.prototype).
+// Ключи без умолчания (acc, offers, hints…) переносятся как есть — их разбирает normalizeSave (game/savefix.js).
+const isPlain = v => !!v && typeof v === 'object' && !Array.isArray(v);
 function deepMerge(a, b) {
-  for (const k in b) a[k] = (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) && a[k] && typeof a[k] === 'object') ? deepMerge(a[k], b[k]) : b[k];
+  for (const k of Object.keys(b)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    const bv = b[k], av = a[k];
+    if (isPlain(av)) { if (isPlain(bv)) deepMerge(av, bv); }
+    else if (Array.isArray(av)) { if (Array.isArray(bv)) a[k] = bv; }
+    else if (av !== undefined && av !== null) { if (typeof bv === typeof av && (typeof bv !== 'number' || Number.isFinite(bv))) a[k] = bv; }
+    else a[k] = bv;
+  }
   return a;
 }

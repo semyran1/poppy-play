@@ -100,7 +100,11 @@ export function drawBossBar(ctx, b) {
   ctx.fillStyle = '#5a1a4a'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 7); ctx.fill();
   const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#ff5aa8'); g.addColorStop(1, '#c85aa0');
   ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(x, y, Math.max(0, w * b.hp / b.maxHp), h, 7); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.8)'; for (const f of [0.33, 0.66]) ctx.fillRect(x + w * f - 1, y - 2, 2, h + 4);
-  ctx.font = '900 15px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#2a0a14'; ctx.strokeText(b.name, 0, y - 9); ctx.fillStyle = '#ffd6ec'; ctx.fillText(b.name, 0, y - 9);
+  ctx.fillStyle = 'rgba(255,255,255,0.8)'; for (const f of (b.marks || [0.33, 0.66])) ctx.fillRect(x + w * f - 1, y - 2, 2, h + 4);   // отметки фаз / волн
+  ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = '#2a0a14';
+  let nm = b.waveName ? `${b.name} · ${b.waveName}` : b.name, fz = 15; const maxW = w + 8;   // подпись всегда в полосу: кегль подбирается по замеру (запасной шрифт шире Nunito), совсем длинное — только название волны
+  const fit = () => { fz = 15; ctx.font = `900 ${fz}px Nunito, sans-serif`; while (fz > 10 && ctx.measureText(nm).width > maxW) { fz--; ctx.font = `900 ${fz}px Nunito, sans-serif`; } return ctx.measureText(nm).width <= maxW; };
+  if (!fit() && b.waveName) { nm = b.waveName; fit(); }
+  ctx.strokeText(nm, 0, y - 9); ctx.fillStyle = '#ffd6ec'; ctx.fillText(nm, 0, y - 9);
   ctx.restore();
 }

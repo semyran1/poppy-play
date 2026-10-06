@@ -101,13 +101,14 @@ export function playerBox(p) { return { x: p.x - p.w / 2, y: p.y - p.h, w: p.w, 
 
 export function drawPlayer(ctx, p, t) {
   if (p.dead) return;
-  const blink = p.iframes > 0 && Math.floor(t * 20) % 2 === 0;
+  const blink = p.iframes > 0.12 && Math.floor(t * 20) % 2 === 0;   // щит босса и помада держат iframes на 0,1 с постоянно — без мерцания героини на всё время бонуса (у них свой ореол)
   const air = Math.min(1, (GROUND - p.y) / 200);
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(p.x, GROUND + 3, 26 * (1 - air * 0.5), 6 * (1 - air * 0.5), 0, 0, Math.PI * 2); ctx.fill();
   if (blink) return;
   ctx.save();
   if (p.hurtFlash > 0) ctx.filter = 'sepia(1) saturate(6) hue-rotate(-40deg) brightness(1.1)';
   ctx.translate(p.x, p.y);
+  { const m = ctx.getTransform(), h = globalThis.__heroDraw; globalThis.__heroDraw = { n: (h ? h.n : 0) + 1, x: m.e, y: m.f, k: Math.hypot(m.a, m.b) }; }   // хук автотестов (tools/rotfuzz.mjs): героиня реально нарисована, где и в каком масштабе (устройственные px)
   if (p.hero === 'classic' && IMG.gun) { // Поппи оригинала: модель с бластером, бег — подпрыгивание кодом
     const moving = Math.abs(p.vx) > 40 && p.onGround, H = CLASSIC_H, Wd = MODEL.w * H / MODEL.h;
     const bob = moving ? Math.abs(Math.sin(p.runT * 7)) * 5 : Math.sin(t * 3) * 1.5;

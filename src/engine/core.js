@@ -23,6 +23,11 @@
 // Сцены (см. main.js, корневая сцена): scene.frame (по умолчанию true) — рисуется в дизайн-рамке, вокруг эмбиент
 // (зеркально-размытый край кадра, engine/frame.js); scene.frame = false — сцена получает полный вид (play);
 // scene.portraitLayout (по умолчанию false) — true означает «сцена сама рисует портретную раскладку на полном виде».
+// Смена размера (поворот телефона, адресная строка): события resize/orientationchange/visualViewport/screen.orientation на телефоне приходят
+// пачкой и РАНЬШЕ, чем обновятся размеры, поэтому вид не доверяет событию, а перечитывает окно (readViewport): пересчёт не чаще раза в ~40 мс,
+// повторы через 150/400/1000 мс после любого события, дешёвый опрос каждый кадр (ловит смену без события); нулевые/крошечные (< 80 px) размеры игнорируются
+// (остаётся последний валидный вид). Баг «героиня пропала после поворота» — зависший вид старой ориентации (docs/iter_rotation_fix.md). После пересчёта
+// onViewChange переносит позиции, а game/viewguard.js приводит бой в допустимое состояние. Холст пересоздаётся только при смене размера.
 // Указатель: inp.pointer.x/y — в пространстве текущей сцены (рамка или вид), inp.pointer.rx/ry — всегда в координатах вида.
 export let W = 960, H = 540;
 export const DESIGN_W = 960, DESIGN_H = 540, FLOOR_PAD = 58;
@@ -69,9 +74,28 @@ export function createGame(canvas) {
   const insets = () => { const c = getComputedStyle(probe); return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0, b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 }; };
 
   const coarseMq = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : null;
-  function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const vw = Math.max(1, window.innerWidth), vh = Math.max(1, window.innerHeight);
+
+  // ---- Чтение размеров окна (одно место) ----
+  // На реальном телефоне при повороте размеры приходят пачкой: innerWidth уже новый, innerHeight ещё старый, visualViewport отстаёт,
+  // бывают 0×0 и крошечные значения, высота прыгает на 56–110 px от адресной строки. Поэтому: (1) невалидные размеры (не конечные, < MIN_VP) игнорируются —
+  // остаётся последний валидный вид; (2) читаем innerWidth/innerHeight, при их невалидности — clientWidth/Height, затем visualViewport;
+  // (3) перерасчёт не в каждом событии, а не чаще раза в ~40 мс и всегда по СВЕЖИМ значениям; (4) после любого события ещё несколько перечитываний
+  // (150/400/1000 мс), чтобы поймать окончательные размеры; (5) каждый кадр дешёвый опрос — ловит смену размеров без события.
+  const MIN_VP = 80;
+  const okDim = v => typeof v === 'number' && isFinite(v) && v >= MIN_VP && v <= 20000;
+  function readViewport() {
+    const vv = window.visualViewport, de = document.documentElement;
+    const cands = [[window.innerWidth, window.innerHeight], [de && de.clientWidth, de && de.clientHeight], [vv && vv.width, vv && vv.height]];
+    for (const [w, h] of cands) if (okDim(w) && okDim(h)) return { w: Math.round(w), h: Math.round(h) };
+    return null;   // ничего валидного: держим предыдущий вид
+  }
+  let lastRead = { w: 0, h: 0 };
+  function resize(force) {
+    const rd = readViewport(); if (!rd) return false;
+    const dprRaw = window.devicePixelRatio, dpr = Math.min(isFinite(dprRaw) && dprRaw > 0 ? dprRaw : 1, 2);
+    lastRead = rd;
+    const vw = rd.w, vh = rd.h;
+    if (!force && vw === view.vw && vh === view.vh && dpr === view.dpr && canvas.width === Math.round(vw * dpr) && canvas.height === Math.round(vh * dpr)) return false;
     const L = layoutFor(vw, vh, !!coarseMq?.matches);
     const prev = { W: view.W, H: view.H, portrait: view.portrait, ground: view.ground, uiScale: view.uiScale };
     const ins = insets(), sc = L.scale;
@@ -85,13 +109,29 @@ export function createGame(canvas) {
     else { const s = Math.min(1, L.W / DESIGN_W); view.frame = { ox: (L.W - DESIGN_W * s) / 2, oy: (L.H - DESIGN_H * s) / 2, s, w: DESIGN_W, h: DESIGN_H }; }
     game.W = L.W; game.H = L.H; game.scale = sc; game.dpr = dpr; game.offX = L.dx; game.offY = L.dy;
     canvas.style.width = vw + 'px'; canvas.style.height = vh + 'px';
-    canvas.width = Math.round(vw * dpr); canvas.height = Math.round(vh * dpr);
-    if (prev.W !== view.W || prev.H !== view.H || prev.uiScale !== view.uiScale) for (const fn of listeners) { try { fn(view, prev); } catch (e) { console.error(e); } }
+    const cw = Math.round(vw * dpr), ch = Math.round(vh * dpr);
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
+    view.epoch = (view.epoch || 0) + 1;
+    game.ctxDirty = true;   // размер холста сбрасывает состояние контекста; кадр начнётся с чистого
+    const changed = prev.W !== view.W || prev.H !== view.H || prev.uiScale !== view.uiScale;
+    if (changed || force === 'notify') for (const fn of listeners) { try { fn(view, prev); } catch (e) { console.error(e); game.errors?.push('onViewChange: ' + String(e && e.stack || e)); } }
+    return true;
   }
-  window.addEventListener('resize', resize);
-  window.addEventListener('orientationchange', () => setTimeout(resize, 60));
-  window.visualViewport?.addEventListener('resize', resize);
-  resize();
+  // Отложенный перерасчёт: не чаще раза в ~40 мс (серия событий → один пересчёт по свежим значениям)
+  let rzTimer = 0;
+  function resizeSoon() { if (rzTimer) return; rzTimer = setTimeout(() => { rzTimer = 0; resize(); }, 40); }
+  // после события ещё несколько перечитываний: окончательные размеры приходят позже orientationchange
+  const settleTimers = [];
+  function settle() { for (const t of settleTimers.splice(0)) clearTimeout(t); for (const ms of [150, 400, 1000]) settleTimers.push(setTimeout(() => resize(), ms)); }
+  const onAny = () => { resizeSoon(); settle(); };
+  window.addEventListener('resize', onAny);
+  window.addEventListener('orientationchange', onAny);
+  window.addEventListener('pageshow', onAny);
+  window.visualViewport?.addEventListener('resize', onAny);
+  try { screen.orientation?.addEventListener('change', onAny); } catch { }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) onAny(); });
+  resize(true);
 
   // клиентские координаты (CSS px) → логические координаты вида
   game.toWorld = (cx, cy) => {
@@ -107,12 +147,18 @@ export function createGame(canvas) {
 
   game.freeze = (sec) => { game.hitstop = Math.max(game.hitstop, sec); };
 
-  // Перед кадром: трансформация вида (+ заливка полей, если вид не занимает окно целиком)
+  // Перед кадром: чистое состояние контекста (после исключения в прошлой отрисовке или смены размера холста могли остаться
+  // незакрытые save(), clip, filter, globalAlpha — «невидимая» героиня) + трансформация вида (+ заливка полей, если вид не занимает окно целиком)
   function beginDraw() {
+    if (game.ctxDirty) { game.ctxDirty = false; try { if (ctx.reset) ctx.reset(); else { const w = canvas.width; canvas.width = w; } } catch (e) { } }
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; if (ctx.filter !== 'none') ctx.filter = 'none';
     const k = view.scale * view.dpr;
     if (view.dx > 0.75 || view.dy > 0.75) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#07040a'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
     ctx.setTransform(k, 0, 0, k, view.dx * view.dpr, view.dy * view.dpr);
   }
+  const logErr = (e, tag) => { console.error(e); game.errors.push(tag + String(e && e.stack || e)); if (game.errors.length > 20) game.errors.shift(); };
+  // отрисовка в своём try: ошибка кадра не должна оставлять холст в «грязном» состоянии и не ломает следующий кадр
+  function safeDraw(alpha) { try { beginDraw(); game.scene?.draw?.(ctx, alpha); } catch (e) { game.ctxDirty = true; logErr(e, ''); } }
 
   let acc = 0, last = performance.now();
   game.paused = false;
@@ -120,11 +166,13 @@ export function createGame(canvas) {
   // Одна ошибка в кадре не должна останавливать игру навсегда: логируем и продолжаем цикл
   function frame(now) {
     requestAnimationFrame(frame);
-    try { tick(now); } catch (e) { console.error(e); game.errors.push(String(e && e.stack || e)); if (game.errors.length > 20) game.errors.shift(); }
+    try { tick(now); } catch (e) { logErr(e, ''); }
   }
   function tick(now) {
     let dt = (now - last) / 1000; last = now;
+    if (!(dt >= 0)) dt = 0;             // защита от NaN/отрицательного шага
     if (dt > 0.25) dt = 0.25;           // вкладка спала — не догонять
+    { const rd = readViewport(); if (rd && (rd.w !== view.vw || rd.h !== view.vh || Math.min(window.devicePixelRatio || 1, 2) !== view.dpr)) resizeSoon(); }   // опрос: смена размера без события (адресная строка)
     game.realTime += dt;
     acc += dt;
     let steps = 0;
@@ -133,15 +181,15 @@ export function createGame(canvas) {
       if (game.hitstop > 0) { game.hitstop -= game.fixedDt; if (game.scene?.updateFrozen) game.scene.updateFrozen(game.fixedDt); continue; }
       const sdt = game.fixedDt * game.timeScale;
       if (!game.paused) game.time += sdt;
-      game.scene?.update?.(sdt, game.fixedDt);
+      try { game.scene?.update?.(sdt, game.fixedDt); } catch (e) { logErr(e, ''); }   // ошибка шага не отменяет отрисовку
     }
-    beginDraw();
-    game.scene?.draw?.(ctx, acc / game.fixedDt);
+    safeDraw(acc / game.fixedDt);
   }
   requestAnimationFrame(frame);
 
   // Ручной шаг для автотестов (headless): window.__step(n)
   game.step = (n = 1) => {
+    { const rd = readViewport(); if (rd && (rd.w !== view.vw || rd.h !== view.vh)) resizeSoon(); }   // как в tick: ловим смену размера без события
     for (let i = 0; i < n; i++) {
       if (game.hitstop > 0) { game.hitstop -= game.fixedDt; continue; }
       const sdt = game.fixedDt * game.timeScale;
@@ -151,6 +199,7 @@ export function createGame(canvas) {
     beginDraw();
     game.scene?.draw?.(ctx, 0);
   };
-  game.resize = resize;
+  game.resize = () => resize();          // перечитать окно сейчас (идемпотентно: без изменений ничего не делает)
+  game.resizeSoon = resizeSoon;
   return game;
 }

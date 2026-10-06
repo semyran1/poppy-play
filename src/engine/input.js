@@ -1,13 +1,16 @@
 // Ввод: клавиатура + мышь + тач. Игровые оси: move (-1..1, дробное у тача), jump (держится), jumpPressed (фронт).
 // Тач в бою (inp.gameplay = true, ставит сцена боя): ПЛАВАЮЩИЙ ДЖОЙСТИК. Касание в левых ~55 % экрана (по CSS-координатам)
 // задаёт центр, смещение по X даёт аналоговое движение (мёртвая зона 8 лог. px, полная скорость при 55 px, плавная кривая),
-// отпустил — стоп; если палец ушёл далеко (> 80 px) — центр следует за ним. Свайп вверх (начатый левой рукой) — прыжок.
-// Правая часть экрана: любое касание = прыжок (держишь — прыжок выше); крупная кнопка (jumpButton) — только подсказка-цель.
-// Мультитач: левая рука двигает, правая прыгает одновременно. Вне боя касание — обычный «клик» (pointer.*), как у мыши.
+// отпустил — стоп; если палец ушёл далеко (> 80 px) — центр следует за ним.
+// ПРЫЖОК (отдельной кнопки нет, inp.showJumpButton = false): (1) короткий тап (≤ 250 мс, сдвиг < 18 CSS px) в ЛЮБОМ месте поля боя, кроме кнопки
+// паузы: в правой части (и любым вторым пальцем при занятом джойстике) — сразу при касании, в левой — при отпускании (касание при этом всё равно ставит
+// джойстик, движение не ломается); держишь палец — прыжок выше; (2) палец, ведущий джойстик, ушёл вверх на ≥ 45 лог. px — прыжок, пока выше порога
+// «удерживается» (переменная высота), повторный — после возврата ниже 20 px (гистерезис); быстрый свайп вверх — тоже прыжок.
+// Мультитач: левая рука двигает, вторая прыгает где угодно. Вне боя касание — обычный «клик» (pointer.*), как у мыши.
 // Указатель: pointer.x/y — в пространстве текущей сцены (дизайн-рамка или вид, см. setSpace), pointer.rx/ry — всегда в виде.
 import { view } from './core.js';
 
-export const STICK = { dead: 8, full: 55, follow: 80, zone: 0.55 };   // лог. px; zone — доля ширины окна под джойстик
+export const STICK = { dead: 8, full: 55, follow: 80, zone: 0.55, jumpUp: 45, jumpRe: 20, tapMs: 250, tapPx: 18, tapHold: 14 };   // лог. px; zone — доля ширины окна под джойстик; jumpUp/jumpRe — порог прыжка «вверх» и порог возврата; tapMs/tapPx (CSS px) — что считать тапом; tapHold — шагов «зажатого» прыжка у тапа
 
 export function createInput(game) {
   const keys = new Set(), pressed = new Set(), uiPressed = new Set();
@@ -21,13 +24,14 @@ export function createInput(game) {
     isTouch: !!mq?.matches,
     gameplay: false,                 // true — касания работают как джойстик/прыжок (ставит сцена боя каждый шаг)
     stick: { active: false, cx: 0, cy: 0, x: 0, y: 0, v: 0 },   // плавающий джойстик (логические координаты вида)
-    jumpButton: { x: 880, y: 455, r: 58 },
+    jumpButton: { x: 880, y: 455, r: 58 }, showJumpButton: false,   // большая кнопка прыжка выключена (прыжок — тап в любом месте / джойстик вверх); флаг — на случай возврата
     pauseButton: null,               // {x,y,r} в координатах вида — ставит HUD (ui.js), касание по ней = пауза
     anyPressed: false,
     space: null,
   };
   game.inp = inp;
   const touches = new Map();
+  let holdFrames = 0;   // шагов «зажатого» прыжка после тапа/быстрого свайпа (палец уже поднят, а прыжок должен быть полной высоты)
 
   addEventListener('keydown', e => {
     if (!keys.has(e.code)) { pressed.add(e.code); uiPressed.add(e.code); }
@@ -35,7 +39,7 @@ export function createInput(game) {
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
   });
   addEventListener('keyup', e => keys.delete(e.code));
-  addEventListener('blur', () => { keys.clear(); for (const t of touches.values()) t.dead = true; touches.clear(); inp.stick.active = false; });
+  addEventListener('blur', () => { keys.clear(); for (const t of touches.values()) t.dead = true; touches.clear(); inp.stick.active = false; holdFrames = 0; });
 
   // пространство указателя: null — полный вид, иначе дизайн-рамка {ox,oy,s}: x = (rx − ox)/s
   inp.setSpace = (fr) => {
@@ -50,15 +54,14 @@ export function createInput(game) {
     inp.isTouch = isTouch;
     setPos(p.x, p.y); const P = inp.pointer; P.down = true; P.pressed = true; P.clicked = true;
     if (!isTouch) return;
-    const t = { sx: p.x, sy: p.y, x: p.x, y: p.y, t: performance.now(), role: 'ui', armed: true };
+    const t = { sx: p.x, sy: p.y, x: p.x, y: p.y, cx0: cx, cy0: cy, moved: 0, t: performance.now(), role: 'ui', armed: true, above: false };
     const pb = inp.pauseButton;
     if (inp.gameplay && pb && Math.hypot(p.x - pb.x, p.y - pb.y) < pb.r * 1.5) pressed.add('TouchPause');   // кнопка паузы в HUD — не прыжок
     else if (inp.gameplay) {
       const left = (cx - (c.getBoundingClientRect().left)) < view.vw * STICK.zone;
-      if (!left) { t.role = 'jump'; pressed.add('TouchJump'); }
-      else if (![...touches.values()].some(q => q.role === 'move')) {
+      if (left && ![...touches.values()].some(q => q.role === 'move')) {   // левая часть, джойстик свободен: касание ведёт джойстик (короткий тап даст ещё и прыжок при отпускании)
         t.role = 'move'; const s = inp.stick; s.active = true; s.cx = p.x; s.cy = p.y; s.x = p.x; s.y = p.y; s.v = 0;
-      }
+      } else { t.role = 'jump'; pressed.add('TouchJump'); holdFrames = Math.max(holdFrames, STICK.tapHold); }   // правая часть или второй палец: тап = прыжок сразу
     }
     touches.set(id, t);
   }
@@ -66,19 +69,25 @@ export function createInput(game) {
     const p = game.toWorld(cx, cy);
     setPos(p.x, p.y);
     const t = touches.get(id); if (!t) return;
-    t.x = p.x; t.y = p.y;
+    t.x = p.x; t.y = p.y; t.moved = Math.max(t.moved, Math.hypot(cx - t.cx0, cy - t.cy0));
     if (t.role === 'move') {
       const s = inp.stick; s.x = p.x; s.y = p.y;
       const dx = p.x - s.cx; if (Math.abs(dx) > STICK.follow) s.cx = p.x - Math.sign(dx) * STICK.follow;   // центр тянется за пальцем
-      // свайп вверх (преобладает вертикаль) = прыжок; повторный — после возврата пальца вниз
+      // палец выше центра джойстика на ≥ 45 px = прыжок (быстрый свайп проходит порог так же); пока выше порога — прыжок «держится»;
+      // повторный — только после возврата ниже 20 px (гистерезис). Поднял палец — удержание снимается вместе с касанием, залипания нет.
       const up = s.cy - p.y;
-      if (t.armed && up > 55 && up > Math.abs(p.x - s.cx) * 0.8) { pressed.add('TouchJump'); t.armed = false; t.jumpHold = 20; }   // свайп = «зажатый» прыжок на ~⅓ с (полная высота)
-      else if (!t.armed && up < 20) t.armed = true;
+      t.above = up >= STICK.jumpUp;
+      if (t.armed && t.above) { pressed.add('TouchJump'); t.armed = false; holdFrames = Math.max(holdFrames, 20); }   // «зажатый» прыжок на ~⅓ с: быстрый свайп даёт полную высоту
+      else if (!t.armed && up < STICK.jumpRe) t.armed = true;
     }
   }
-  function onUp(id) {
+  function onUp(id, cancel) {
     const t = touches.get(id);
-    if (t?.role === 'move') inp.stick.active = false;
+    if (t?.role === 'move') {
+      inp.stick.active = false;
+      // короткий тап левой рукой (джойстик не двигали) — прыжок; отмена касания системой (cancel) тапом не считается
+      if (!cancel && inp.gameplay && t.armed && t.moved < STICK.tapPx && performance.now() - t.t <= STICK.tapMs) { pressed.add('TouchJump'); holdFrames = Math.max(holdFrames, STICK.tapHold); }
+    }
     touches.delete(id);
     inp.pointer.down = touches.size > 0; inp.pointer.released = true;
     if (t && inp.isTouch) inp.pointer.leave = true;   // после клика (конец кадра) убираем «наведение»
@@ -86,7 +95,7 @@ export function createInput(game) {
   c.addEventListener('pointerdown', e => { c.setPointerCapture?.(e.pointerId); onDown(e.pointerId, e.clientX, e.clientY, e.pointerType === 'touch' || e.pointerType === 'pen' && inp.isTouch); e.preventDefault(); });
   c.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') inp.isTouch = false; onMove(e.pointerId, e.clientX, e.clientY); });
   c.addEventListener('pointerup', e => onUp(e.pointerId));
-  c.addEventListener('pointercancel', e => onUp(e.pointerId));
+  c.addEventListener('pointercancel', e => onUp(e.pointerId, true));
   c.addEventListener('contextmenu', e => e.preventDefault());
   // жесты системы: масштаб, прокрутка-«резинка», выделение
   for (const ev of ['gesturestart', 'gesturechange', 'gestureend', 'dblclick', 'selectstart', 'dragstart']) document.addEventListener(ev, e => e.preventDefault());
@@ -101,12 +110,19 @@ export function createInput(game) {
     if (inp.pointer.leave && touches.size === 0) { inp.pointer.leave = false; setPos(-9999, -9999); }
   };
 
-  // Раскладка тач-элементов (логические координаты вида): кнопка прыжка у правого нижнего угла
+  // Раскладка тач-элементов (логические координаты вида): кнопка прыжка у правого нижнего угла (рисуется и учитывается только при inp.showJumpButton)
   inp.layout = () => {
     const ui = view.uiScale, r = 58 * (1 + (ui - 1) * 0.5), safeR = view.safe.r;
     const jb = inp.jumpButton; jb.r = r; jb.x = view.W - safeR - r - 22;
     jb.y = view.portrait ? view.ground - r - 34 : view.ground - r * 0.5 - 6;
     return jb;
+  };
+
+  // Смена вида/потеря фокуса: все касания считаются отпущенными (иначе после поворота джойстик/прыжок «залипают»)
+  inp.resetTouches = () => {
+    for (const t of touches.values()) t.dead = true;
+    touches.clear(); inp.stick.active = false; inp.stick.v = 0; inp.pointer.down = false; inp.move = 0; inp.jump = false;
+    pressed.delete('TouchJump'); pressed.delete('TouchPause');
   };
 
   // Вызывать один раз в начале шага симуляции
@@ -124,7 +140,7 @@ export function createInput(game) {
     } else s.v = 0;
     inp.move = Math.max(-1, Math.min(1, m));
     let tj = false;
-    if (inp.gameplay) for (const t of touches.values()) { if (t.role === 'jump') tj = true; else if (t.jumpHold > 0) { t.jumpHold--; tj = true; } }
+    if (inp.gameplay) { for (const t of touches.values()) if (t.role === 'jump' || (t.role === 'move' && t.above)) tj = true; if (holdFrames > 0) { holdFrames--; tj = true; } } else holdFrames = 0;
     inp.jump = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('Space') || tj;
     inp.jumpPressed = pressed.has('ArrowUp') || pressed.has('KeyW') || pressed.has('Space') || (inp.gameplay && pressed.has('TouchJump'));
     inp.pausePressed = pressed.has('Escape') || pressed.has('KeyP') || pressed.has('TouchPause');

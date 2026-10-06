@@ -12,7 +12,7 @@ import { newPet, petTarget, updatePet, petReact, petIdle, drawPet } from './pets
 import { drawTampon } from '../art/sprites.js';
 import { post } from '../art/post.js';
 import { ACHIEVEMENTS, REWARD_NAMES, BACK_POSE_ACH, BACK_POSE_HINT, facingOf } from './achievements.js';
-import { text, wrap, FONT } from './ui.js';
+import { text, wrap, FONT, BTNLOG } from './ui.js';
 import { drawBackground, drawVignette } from '../art/backgrounds.js';
 import { drawSceneBg } from '../art/scenes.js';
 import { drawStar } from '../art/sprites.js';
@@ -52,6 +52,7 @@ export function createMenu(app) {
   // состояние портретной раскладки (подробно — в разделе «ПОРТРЕТНАЯ РАСКЛАДКА» ниже и в docs/portrait_menus.md)
   const gest = { down: false, sx: 0, sy: 0, x: 0, y: 0, moved: false, scr: null, vy: 0, tap: null };   // жест: тап / перетаскивание списка
   const scr = {};                       // id -> { off, vy, max, r, live } — прокручиваемые списки
+  const lh = [];                        // QA: прямоугольники нажимаемых элементов ландшафтного кадра (координаты дизайн-рамки), пишутся только при BTNLOG.on
   const reg = {};                       // id -> { x, y, w, h } — зарегистрированные кнопки текущего кадра (координаты вида)
   let achRows = null, achKey = '';      // кэш раскладки строк достижений (портрет)
   let blocked = false, curDt = 0, outSel = null, wheelOn = false;   // blocked — поверх открыто окно: нижний слой не получает касаний
@@ -80,6 +81,7 @@ export function createMenu(app) {
     enter() { t = 0; drawT = 0; view = 'main'; topup.open = false; confirmNew = false; tear = null; bark = null; resetGesture(); loadHeroineKey(app.save.outfit || 'lara'); playMusic('menu'); initWheel(); },
     setView(v, o = {}) { view = v; confirmNew = false; shopPage = 0; if (o.topup !== undefined) topup.open = !!o.topup; if (o.tab) wtab = o.tab; if (o.slot) accSlot = o.slot; for (const k in scr) scr[k].off = 0; },
     get view() { return view; },
+    get lhits() { return lh; },
     get hits() { return reg; },          // прямоугольники кнопок портретного кадра (координаты вида) — для автотестов
     get scrollers() { return scr; },
     get topupOpen() { return topup.open; },
@@ -107,6 +109,7 @@ export function createMenu(app) {
     },
     draw(ctx) {
       if (VIEW.portrait) return drawPortrait(ctx);
+      lh.length = 0;
       const inp = app.inp, S = app.save;
       const dt = clamp(t - drawT, 0, 0.1); drawT = t;
       if (view === 'settings') view = 'main';   // «Настройки» есть только в портретной раскладке
@@ -1413,7 +1416,8 @@ export function createMenu(app) {
     const v = hov[id] = clamp((hov[id] || 0) + (over ? dt : -dt) / 0.12, 0, 1);
     return easeOut(v);
   }
-  function hitRect(inp, x, y, w, h) { const p = inp.pointer; return p.x > x && p.x < x + w && p.y > y && p.y < y + h; }
+  // тач-цель: элемент меньше 44 CSS px (ландшафтная рамка 960×540 на маленьком экране уменьшена) нажимается и за видимым краем, не больше 6 CSS px с каждой стороны
+  function hitRect(inp, x, y, w, h) { const p = inp.pointer, k = (VIEW.frame.s * VIEW.scale) || 1, mx = Math.min(6 / k, Math.max(0, (44 / k - w) / 2)), my = Math.min(6 / k, Math.max(0, (44 / k - h) / 2)); if (BTNLOG.on && inp !== GHOST) lh.push({ x, y, w, h, mx, my }); return p.x > x - mx && p.x < x + w + mx && p.y > y - my && p.y < y + h + my; }   // lh — нажимаемые элементы ландшафтного кадра для автотестов (QA)
   function consume(inp) { if (inp.pointer.clicked) { inp.pointer.clicked = false; return true; } return false; }
 
   // Билет-кнопка. Корешок 24 px слева с перфорацией и полукруглыми вырезами на линии отрыва.

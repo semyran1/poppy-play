@@ -11,13 +11,16 @@ export const BASE_STATS = {
   armor: 0,        // шанс не потерять сердце (0..0.5)
   regen: 0,        // сердце раз в N сек (0 = нет)
   revives: 0, rerolls: 1,
+  duvet: 0,        // шанс, что снаряд (слеза, семечко, попкорн, буква) не ранит — Пуховик
+  cocoa: 0,        // уровень «Чашки какао»: греет при повышении уровня
+  umbCatch: 0,     // радиус купола Складного зонтика, ловящего слёзы и семечки сверху (ур. 2–3)
 };
 
 // ---------- Оружие: уровни как приращения ----------
 // cd — перезарядка (с), dmg — урон, n — снарядов, pierce — сколько врагов пробивает, area — размер
 export const WEAPONS = {
   tampon: {
-    name: 'Тампон-бластер', icon: 'tampon', pair: 'cotton', evo: 'gatling', start: true,
+    name: 'Тампон-бластер', icon: 'tampon', pair: 'cotton', evo: 'gatling', start: true, tier: 'rare',
     desc: 'Стреляет вверх. Надёжно, как мама.',
     lv: [
       { cd: 0.25, dmg: 10, n: 1, pierce: 0 },
@@ -33,7 +36,7 @@ export const WEAPONS = {
     lv: [{ cd: 0.09, dmg: 14, n: 3, pierce: 2 }],
   },
   pad: {
-    name: 'Прокладка-бумеранг', icon: 'pad', pair: 'wings', evo: 'angel',
+    name: 'Прокладка-бумеранг', icon: 'pad', pair: 'wings', evo: 'angel', tier: 'uncommon',
     desc: 'Улетает вверх и возвращается. Пробивает всех.',
     lv: [
       { cd: 1.3, dmg: 15, n: 1, area: 1 },
@@ -49,7 +52,7 @@ export const WEAPONS = {
     lv: [{ cd: 0, dmg: 22, n: 4, area: 1.5 }],
   },
   pills: {
-    name: 'Ибупрофенчик', icon: 'pill', pair: 'water', evo: 'fizz', rare: true,
+    name: 'Ибупрофенчик', icon: 'pill', pair: 'water', evo: 'fizz', rare: true, tier: 'rare',
     desc: 'Самонаводящиеся таблетки. Найдут боль сами.',
     lv: [
       { cd: 0.85, dmg: 12, n: 2 },
@@ -65,7 +68,7 @@ export const WEAPONS = {
     lv: [{ cd: 0.6, dmg: 22, n: 5, area: 1 }],
   },
   bottle: {
-    name: 'Грелка', icon: 'bottle', pair: 'blanket', evo: 'geyser', rare: true,
+    name: 'Грелка', icon: 'bottle', pair: 'blanket', evo: 'geyser', rare: true, tier: 'rare',
     desc: 'Бросок в самую толпу и облако горячего пара.',
     lv: [
       { cd: 1.8, dmg: 22, n: 1, area: 1, dot: 7, dotDur: 2 },
@@ -81,7 +84,7 @@ export const WEAPONS = {
     lv: [{ cd: 1.5, dmg: 36, n: 2, area: 1.4, dot: 42, dotDur: 1.6 }],
   },
   broom: {
-    name: 'Ведьмина метла', icon: 'broom', pair: 'sneakers', evo: 'vortex',
+    name: 'Ведьмина метла', icon: 'broom', pair: 'sneakers', evo: 'vortex', tier: 'uncommon',
     desc: 'Взмах над головой. Сметает всё, что близко.',
     lv: [
       { cd: 1.2, dmg: 30, area: 1 },
@@ -97,7 +100,7 @@ export const WEAPONS = {
     lv: [{ cd: 0, dmg: 70, area: 1.6 }],
   },
   choco: {
-    name: 'Шоколадка', icon: 'choco', pair: 'sweet', evo: 'fountain', rare: true,
+    name: 'Шоколадка', icon: 'choco', pair: 'sweet', evo: 'fountain', rare: true, tier: 'rare',
     desc: 'Веер долек вблизи. Сладкая месть.',
     lv: [
       { cd: 0.8, dmg: 5, n: 4, spread: 0.36 },
@@ -113,7 +116,7 @@ export const WEAPONS = {
     lv: [{ cd: 0.18, dmg: 10, n: 5, spread: 0.55 }],
   },
   tea: {
-    name: 'Ромашковый чай', icon: 'tea', pair: 'headphones', evo: 'ceremony',
+    name: 'Ромашковый чай', icon: 'tea', pair: 'headphones', evo: 'ceremony', tier: 'uncommon',
     desc: 'Луч успокоения вверх. Прожигает весь столбец.',
     lv: [
       { cd: 2.4, on: 0.8, dps: 60, width: 22 },
@@ -129,7 +132,7 @@ export const WEAPONS = {
     lv: [{ cd: 0, on: 99, dps: 150, width: 46 }],
   },
   ice: {
-    name: 'Пломбир', icon: 'ice', pair: 'mirror', evo: 'permafrost',
+    name: 'Пломбир', icon: 'ice', pair: 'mirror', evo: 'permafrost', tier: 'uncommon',
     desc: 'Ледяные шарики замедляют на 40%.',
     lv: [
       { cd: 0.5, dmg: 8, n: 1, slow: 0.4 },
@@ -145,7 +148,7 @@ export const WEAPONS = {
     lv: [{ cd: 0.32, dmg: 16, n: 3, slow: 0.7 }],
   },
   cup: {
-    name: 'Лунная чаша', icon: 'cup', pair: 'thermos', evo: 'grail', locked: true,
+    name: 'Лунная чаша', icon: 'cup', pair: 'thermos', evo: 'grail', locked: true, tier: 'uncommon',
     desc: 'Серебряная чаша на полу ловит капли — и ковёр остаётся чистым.',
     lv: [
       { cd: 9, dur: 6, width: 60 },
@@ -162,25 +165,43 @@ export const WEAPONS = {
   },
 };
 
+// ---------- Тиры карточек прокачки ----------
+// tier: 'common' (скорость бега, сердечки, магнит, опыт, дальность: берётся часто), 'uncommon' (обычная сила и защита),
+// 'rare' (имбовые: Тампон-бластер и его улучшения, Ибупрофенчик, Грелка, Шоколадка, Ватный запас; золотая рамка в карточках).
+// def: true — защитные карточки: когда до босса главы осталась одна волна, их вес выше и хотя бы одна попадётся в предложение
+// (play.js, buildCards). Веса и «защита от серий» — CARD_TUNE ниже.
+export const CARD_TUNE = {
+  tierW: { common: 1, uncommon: 0.85, rare: 0.5 },   // вес в пуле (одна карточка)
+  rareGap: 1,        // после предложения имбовой карточки следующие N повышений уровня её нет (защита от серий)
+  rarePity: 6,       // если имбовой не было 6 повышений подряд — гарантируем одну
+  upgradeW: 0.7,     // улучшение уже взятого оружия/пассивки реже, чем новое (раньше 1,3 у оружия: тампон лез в каждое предложение)
+  upgradeDecay: 0.88, // и ещё ×0,88 за каждый уровень (чем выше уровень, тем реже)
+  first: { guaranteed: 3, boostLevels: 8, boost: 2.4 },   // самый первый забег: первые 3 повышения — по одной «классной», дальше (до 8-го) шанс имбовых ×2,4
+  defNear: 2.6,      // вес защитных, когда впереди последняя волна перед боссом
+};
+export const DEF_IDS = ['umbrellaP', 'blanket', 'boots', 'mint', 'socks', 'cocoa', 'duvet'];
+
 // ---------- Пассивки ----------
 export const PASSIVES = {
-  cotton:     { name: 'Ватный запас', icon: 'cotton', max: 5, rare: true, desc: '+5% урона; +1 снаряд на ур. 2 и 4', apply: (s, lv) => { s.might += 0.05; if (lv === 2 || lv === 4) s.amount += 1; } },
-  wings:      { name: 'Крылышки', icon: 'wings', max: 5, desc: '+10% скорость снарядов', apply: s => { s.speed += 0.1; } },
-  water:      { name: 'Стакан воды', icon: 'water', max: 5, desc: '−7% перезарядка', apply: s => { s.haste *= 1.075; } },
-  blanket:    { name: 'Плед', icon: 'blanket', max: 5, desc: '+6% шанс не потерять сердце (до 30%)', apply: s => { s.armor = Math.min(0.3, s.armor + 0.06); } },
-  sneakers:   { name: 'Удобные кеды', icon: 'sneakers', max: 5, desc: '+8% скорость бега', apply: s => { s.moveSpeed += 0.08; } },
-  sweet:      { name: 'Сладкоежка', icon: 'sweet', max: 5, desc: '+25% радиус подбора', apply: s => { s.magnet *= 1.25; } },
-  headphones: { name: 'Наушники', icon: 'headphones', max: 5, desc: '+12% площадь', apply: s => { s.area += 0.12; } },
-  mirror:     { name: 'Зеркальце', icon: 'mirror', max: 5, desc: '+5% шанс крита', apply: s => { s.crit += 0.05; } },
-  glitter:    { name: 'Блёстки', icon: 'glitter', max: 5, desc: '+10% урона', apply: s => { s.might += 0.1; } },
-  calendar:   { name: 'Календарик', icon: 'calendar', max: 5, desc: '+10% опыта', apply: s => { s.growth += 0.1; } },
-  cloak:      { name: 'Плащ Лары', icon: 'cloak', max: 3, desc: 'Ур.1: двойной прыжок; далее прыжок выше', apply: (s, lv) => { if (lv === 1) s.extraJumps += 1; else s.jump += 0.08; } },
-  umbrellaP:  { name: 'Складной зонтик', icon: 'umbrellaP', max: 3, desc: 'Щит от одного удара; восстанавливается раз в 24 / 18 / 12 с', apply: (s, lv) => { s.umbCd = [0, 24, 18, 12][lv]; } },
-  boots:      { name: 'Резиновые сапоги', icon: 'boots', max: 2, desc: 'Спазмики и огонь по полу не ранят; прыжок на Спазмика давит его. Ур.2: давка лопает капли рядом', apply: (s, lv) => { s.boots = lv; } },
-  mint:       { name: 'Мятная жвачка', icon: 'mint', max: 3, desc: 'Когда тебя ранят, холодная волна лопает капли рядом (радиус 110 / 150 / 190)', apply: (s, lv) => { s.mint = [0, 110, 150, 190][lv]; } },
-  socks:      { name: 'Тёплые носочки', icon: 'socks', max: 3, desc: 'Сердце восстанавливается само (раз в 90 / 70 / 55 с)', apply: (s, lv) => { s.regen = [0, 90, 70, 55][lv]; } },
-  thermos:    { name: 'Термос', icon: 'thermos', max: 5, desc: '+12% длительность эффектов', apply: s => { s.duration += 0.12; }, locked: true },
-  luckycat:   { name: 'Кошка-талисман', icon: 'luckycat', max: 5, desc: '+10% удача (4-я карта, сундуки)', apply: s => { s.luck += 0.1; }, locked: true },
+  cotton:     { name: 'Ватный запас', icon: 'cotton', max: 5, tier: 'rare', rare: true, desc: '+5% урона; +1 снаряд на ур. 2 и 4', apply: (s, lv) => { s.might += 0.05; if (lv === 2 || lv === 4) s.amount += 1; } },
+  wings:      { name: 'Крылышки', icon: 'wings', max: 5, tier: 'common', desc: '+10% скорость снарядов', apply: s => { s.speed += 0.1; } },
+  water:      { name: 'Стакан воды', icon: 'water', max: 5, tier: 'uncommon', desc: '−7% перезарядка', apply: s => { s.haste *= 1.075; } },
+  blanket:    { name: 'Плед', icon: 'blanket', max: 5, tier: 'uncommon', def: true, desc: '+6% шанс не потерять сердце (до 30%)', apply: s => { s.armor = Math.min(0.3, s.armor + 0.06); } },
+  sneakers:   { name: 'Удобные кеды', icon: 'sneakers', max: 5, tier: 'common', desc: '+8% скорость бега', apply: s => { s.moveSpeed += 0.08; } },
+  sweet:      { name: 'Сладкоежка', icon: 'sweet', max: 5, tier: 'common', desc: '+25% радиус подбора', apply: s => { s.magnet *= 1.25; } },
+  headphones: { name: 'Наушники', icon: 'headphones', max: 5, tier: 'uncommon', desc: '+12% площадь', apply: s => { s.area += 0.12; } },
+  mirror:     { name: 'Зеркальце', icon: 'mirror', max: 5, tier: 'uncommon', desc: '+5% шанс крита', apply: s => { s.crit += 0.05; } },
+  glitter:    { name: 'Блёстки', icon: 'glitter', max: 5, tier: 'uncommon', desc: '+10% урона', apply: s => { s.might += 0.1; } },
+  calendar:   { name: 'Календарик', icon: 'calendar', max: 5, tier: 'common', desc: '+10% опыта', apply: s => { s.growth += 0.1; } },
+  cloak:      { name: 'Плащ Лары', icon: 'cloak', max: 3, tier: 'common', desc: 'Ур.1: двойной прыжок; далее прыжок выше', apply: (s, lv) => { if (lv === 1) s.extraJumps += 1; else s.jump += 0.08; } },
+  umbrellaP:  { name: 'Складной зонтик', icon: 'umbrellaP', max: 3, tier: 'uncommon', def: true, desc: 'Щит от одного удара; восстанавливается раз в 24 / 18 / 12 с. С ур. 2 раскрытый купол над головой ловит слёзы и семечки сверху', apply: (s, lv) => { s.umbCd = [0, 24, 18, 12][lv]; s.umbCatch = [0, 0, 52, 66][lv]; } },
+  boots:      { name: 'Резиновые сапоги', icon: 'boots', max: 2, tier: 'uncommon', def: true, desc: 'Спазмики и огонь по полу не ранят; прыжок на Спазмика давит его. Ур.2: давка лопает капли рядом', apply: (s, lv) => { s.boots = lv; } },
+  mint:       { name: 'Мятная жвачка', icon: 'mint', max: 3, tier: 'uncommon', def: true, desc: 'Когда тебя ранят, холодная волна лопает капли рядом (радиус 110 / 150 / 190)', apply: (s, lv) => { s.mint = [0, 110, 150, 190][lv]; } },
+  socks:      { name: 'Тёплые носочки', icon: 'socks', max: 3, tier: 'common', def: true, desc: 'Сердце восстанавливается само (раз в 90 / 70 / 55 с)', apply: (s, lv) => { s.regen = [0, 90, 70, 55][lv]; } },
+  cocoa:      { name: 'Чашка какао', icon: 'cocoa', max: 3, tier: 'uncommon', def: true, desc: 'При повышении уровня греет: +1 сердце, если их ≤ 2 (ур.2: ≤ 3, ур.3: всегда)', apply: (s, lv) => { s.cocoa = lv; } },
+  duvet:      { name: 'Пуховик', icon: 'duvet', max: 3, tier: 'uncommon', def: true, desc: 'Слёзы, семечки, попкорн и падения помидоров вязнут в пуху: 25 / 40 / 55% таких ударов не ранят', apply: (s, lv) => { s.duvet = [0, 0.25, 0.4, 0.55][lv]; } },
+  thermos:    { name: 'Термос', icon: 'thermos', max: 5, tier: 'common', desc: '+12% длительность эффектов', apply: s => { s.duration += 0.12; }, locked: true },
+  luckycat:   { name: 'Кошка-талисман', icon: 'luckycat', max: 5, tier: 'common', desc: '+10% удача (4-я карта, сундуки)', apply: s => { s.luck += 0.1; }, locked: true },
 };
 
 // ---------- Враги ----------
@@ -292,4 +313,5 @@ export const DEFAULT_SAVE = {
   facing: 'front',       // поза в бою: 'front' — лицом (вполоборота), 'back' — спиной к нам, бластер вверх
   progress: 0,           // следующая доступная глава (контрольная точка)
   hero: 'new',          // 'new' — Поппи с референсов (кукла), 'classic' — Поппи оригинальной игры
+  tutorial: { move: false, jump: false },   // микро-туториал первого забега (tutorial.js): подсказки «беги от края до края» и «прыжок» пройдены; для старых сейвов с забегами не показывается (runs > 0)
 };

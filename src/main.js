@@ -1,17 +1,21 @@
 // Точка входа: профиль, звук, сцены, тосты достижений, хуки для автотестов.
-import { createGame, view } from './engine/core.js';
+import './engine/compat.js';   // polyfill: roundRect, structuredClone (старые Safari / WebView)
+import { createGame, view, onViewChange } from './engine/core.js';
 import { withFrame } from './engine/frame.js';
 import { createInput } from './engine/input.js';
 import { initAudio, audioState, applyVolumes, sfx, suspendAudio } from './engine/audio.js';
 import { loadSave, writeSave } from './engine/util.js';
-import { DEFAULT_SAVE } from './game/data.js';
+import { DEFAULT_SAVE, CHAPTERS } from './game/data.js';
+import { normalizeSave } from './game/savefix.js';   // защита от ломаных/старых сейвов (QA)
 import { createAchievementTracker, facingOf, REWARD_NAMES, backfillAchGems } from './game/achievements.js';
 import { grantPurchase, gemWord } from './game/gems.js';
 import { platform } from './platform/index.js';
 import { ensureAcc, rollFind, ACC } from './game/accessories.js';
 import { loadPoppyImages } from './game/player.js';
 import { createPlay } from './game/play.js';
+import { sanitizeWorld, sanitizePlayer, watchHeroDrawn } from './game/viewguard.js';
 import { createMenu } from './game/menus.js';
+import { createGod } from './game/god.js';   // режим бога / панель DEV (только ?god=1, не на платформах; docs/iter_god.md)
 import { createStory, STORY } from './game/story.js';
 import { preload } from './art/scenes.js';
 import { loadHeroineVec, loadHeroineBack, setHeroineAcc } from './art/heroineVec.js';
@@ -25,7 +29,7 @@ import { drawFilm, drawIris, startIris } from './art/post.js';
 const canvas = document.getElementById('game');
 const game = createGame(canvas);
 const inp = createInput(game);
-const save = loadSave(DEFAULT_SAVE);
+const save = normalizeSave(loadSave(DEFAULT_SAVE));
 save.hero = 'new';
 backfillAchGems(save);                  // стразы: нормализация поля и (один раз) награды за уже полученные достижения
 setHeroineAcc(ensureAcc(save).equip);   // аксессуары: сохранение + общая карта надетого для всех поз героини
@@ -48,7 +52,7 @@ const app = {
   // глава 0 → afterCinema, 1 → afterStreet, 2 → afterGothic, 3 (финал) → finaleHug / finaleWar и меню
   afterChapter: (ch = 0) => {
     const key = ch >= 3 ? (play.run()?.ending === 'hug' ? 'finaleHug' : 'finaleWar') : AFTER[ch];
-    story(key, () => { if (play.hasNext()) setScene(play, { continue: true, chapter: ch + 1 }); else setScene(menu); });
+    story(key, () => { if (play.hasNext() && ch + 1 < CHAPTERS.length) setScene(play, { continue: true, chapter: ch + 1 }); else setScene(menu); });   // (ch + 1 < CHAPTERS.length: afterChapter(3) при рассинхроне run.chapter не должен открывать несуществующую главу)
   },
   // продолжение с контрольной точки из меню (новый забег с главы N): сцена перед главой N
   continueFrom: (ch) => story(ch > 0 ? AFTER[ch - 1] : 'intro', () => setScene(play, { chapter: ch })),
@@ -57,6 +61,7 @@ const app = {
 const track = createAchievementTracker(save, a => { toasts.push({ a, t: 0 }); sfx('ach'); app.persist(); });
 app.toast = (o) => { toasts.push({ a: o.a || { name: o.name || '' }, find: o.find, t: 0 }); };   // для автотестов
 app.emit = (ev, run) => {
+  if (app.god?.blocksAch?.(run)) return;   // режим бога: забег с читами не даёт достижений и находок
   track(ev, run);
   // редкая находка-аксессуар: бросок на «ЧИСТО!» волны (не в первой волне первого забега) и на победу над боссом
   if ((ev.type === 'waveClear' && !(save.stats.runs <= 1 && (run?.wave || 0) === 0)) || ev.type === 'bossKill') {
@@ -71,6 +76,8 @@ platform.init({ grant: (n, token) => { const ok = grantPurchase(save, n, token);
 
 const play = createPlay(app);
 const menu = createMenu(app);
+app.setScene = (s, o) => setScene(s, o);   // для панели DEV (god.js): открыть сцену / экран
+app.god = createGod(app, { play, menu }); window.__god = app.god;
 
 // Корневая сцена: текущая сцена + тосты поверх
 let cur = null;
@@ -80,22 +87,28 @@ function setScene(s, opts) { const changed = cur && cur !== s; cur = s; s.enter?
 // Раскладка сцены: scene.frame !== false — рисуется в «дизайн-рамке» 960×540 (landscape: по центру, вокруг эмбиент;
 // portrait: заглушка — рамка вписана по ширине), scene.frame === false — полный вид (бой).
 // scene.portraitLayout === true — в портрете сцена сама рисует раскладку на полном виде (по умолчанию false).
+let guardN = 0;
 const usesFullView = s => !!s && (s.frame === false || (view.portrait && s.portraitLayout === true));
 game.setScene({
   update(dt, rdt) {
     inp.setSpace(usesFullView(cur) ? null : view.frame);
+    app.god.tick(rdt); if (app.god.frozen()) { inp.gameplay = false; inp.endStep(); return; }   // панель DEV открыта: игра на паузе
     if (cur !== play) inp.gameplay = false;
     cur?.update?.(dt, rdt); for (const t of toasts) t.t += rdt; while (toasts.length && toasts[0].t > 3.2) toasts.shift();
+    // страж боя: героиня/враги/снаряды/питомец/сундук/босс всегда в допустимых границах вида (NaN, улёт за экран, провал под пол — чиним, не падаем)
+    if (cur === play && play.G?.run && play.G.p) { if (play.G.p) sanitizePlayer(play.G.p, game, 'страж'); if ((guardN = (guardN + 1) % 12) === 0) sanitizeWorld(play.G, game, 'страж'); }
   },
   updateFrozen(rdt) { inp.setSpace(usesFullView(cur) ? null : view.frame); cur?.updateFrozen?.(rdt); },
   draw(ctx) {
     if (usesFullView(cur)) { inp.setSpace(null); cur?.draw?.(ctx); }
     else withFrame(game, ctx, c => cur?.draw?.(c), { clip: true, ambient: true });
     inp.setSpace(usesFullView(cur) ? null : view.frame);
+    if (cur === play && play.G?.run) watchHeroDrawn(play.G, game, ['intro', 'wave', 'clear', 'boss', 'bossIntro', 'bossDead'].includes(play.G.phase));   // «героиня не рисуется» → восстановить
     drawFilm(ctx, { fight: cur === play && !['dead', 'chapterClear'].includes(play.G.phase) });
     drawIris(ctx, 1 / 60);
     inp.endFrame();   // клики для кнопок интерфейса живут до конца кадра
     const ui = view.uiScale, saf = view.safe;
+    let stackOff = 0;   // сумма высот предыдущих плашек: плашки разной высоты (с наградой-предметом и стразами) не должны налезать друг на друга
     toasts.slice(0, view.portrait && cur === play && ['dead', 'chapterClear', 'choice'].includes(play.G?.phase) ? 2 : 3).forEach((o, i) => {
       // тосты — сверху по центру, выезжают вниз (не перекрывают HUD и таблицы итогов)
       // на экранах смерти и итогов плашки уходят в правый нижний угол (сверху там итоги и витрина)
@@ -114,7 +127,8 @@ game.setScene({
       ctx.translate(ax, ay); ctx.scale(ui, ui); ctx.translate(-ax, -ay);
       const lowOff = P ? (cur === play && ['dead', 'chapterClear'].includes(play.G?.phase) ? barH : 14) + saf.b : saf.b;
       const topY = P ? (saf.t + (inFight ? 160 * ui : 10)) / ui : saf.t + 90;
-      const y = low ? (P ? view.H - lowOff / ui + 20 : view.H + 20 - saf.b) - (th + 30) * kk - i * step : topY - 150 + 150 * kk + i * step;
+      const y = low ? (P ? view.H - lowOff / ui + 20 : view.H + 20 - saf.b) - (th + 30) * kk - stackOff : topY - 150 + 150 * kk + stackOff;
+      stackOff += step;
       ctx.globalAlpha = Math.max(0, k); const x = P ? view.W / 2 - tw / 2 : low ? view.W - saf.r - 296 : view.W / 2 - 145;
       ctx.fillStyle = o.find ? 'rgba(70,20,60,0.94)' : 'rgba(20,60,50,0.92)'; ctx.beginPath(); ctx.roundRect(x, y, tw, th, 14); ctx.fill();
       ctx.lineWidth = 3; ctx.strokeStyle = o.find ? '#ff9ad0' : '#5ee6c8'; ctx.stroke();
@@ -129,6 +143,9 @@ game.setScene({
     });
   },
 });
+
+// Смена вида (поворот, адресная строка): отпустить касания и джойстик (pointercancel при повороте теряется — иначе «залипшее» движение/прыжок)
+onViewChange((v, prev) => { if (v.portrait !== prev.portrait || Math.abs(v.W / prev.W - 1) > 0.2 || Math.abs(v.H / prev.H - 1) > 0.2) inp.resetTouches?.(); inp.setSpace(usesFullView(cur) ? null : view.frame); });   // мелкие сдвиги (адресная строка) касание не обрывают
 
 // Звук запускается по первому жесту (политика браузеров)
 const unlock = () => { initAudio(); applyVolumes(); };

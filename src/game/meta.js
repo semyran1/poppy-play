@@ -34,8 +34,13 @@ export const isRare = id => !!byId(id)?.rare;
 export const metaById = byId;
 export const hasMeta = (save, id) => !!(save.meta && save.meta[id]);
 
+// «Стартовый набор»: на первой смерти одна самая понятная карточка (Сила) продаётся за символическую цену — чтобы первая покупка случилась сама.
+// Висит в витрине (save.starter = id), пока не куплена; дальше цена обычная.
+export const STARTER = { id: 'might', price: 25 };
+export const isStarter = (save, id) => !!save.starter && save.starter === id && !(save.meta && save.meta[id]);
 export function offerPrice(save, id) {
   const m = byId(id); if (!m) return 0;
+  if (isStarter(save, id)) return STARTER.price;
   return Math.round((isPower(id) ? m.base * 1.5 * ((save.meta[id] || 0) + 1) : m.base) * (m.rare ? 2.2 : 1));
 }
 const pick = a => a[Math.floor(Math.random() * a.length)];
@@ -43,15 +48,18 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 // Новая витрина: 1 сила + 2 разнообразия (чего не хватает — добираем другим типом)
 export function rollOffers(save, o = {}) {
   const wsort = ids => ids.map(id => ({ id, k: Math.random() * (byId(id).rare ? 0.35 : 1) })).sort((a, b) => b.k - a.k).map(o => o.id);
-  let pw0 = META_POWER.filter(m => (save.meta[m.id] || 0) < m.max).map(m => m.id), vr0 = META_VARIETY.filter(m => !save.meta[m.id]).map(m => m.id);
+  if (o.starter && !save.meta[STARTER.id]) save.starter = STARTER.id;
+  if (save.starter && save.meta[save.starter]) save.starter = null;   // уже куплено
+  const st = save.starter || null;
+  let pw0 = META_POWER.filter(m => (save.meta[m.id] || 0) < m.max && m.id !== st).map(m => m.id), vr0 = META_VARIETY.filter(m => !save.meta[m.id]).map(m => m.id);
   // cheap (первые смерти): редкие карточки стоят 150–500 конфет — новичку они не по карману, витрина должна быть покупаемой
   if (o.cheap) { const ok = id => !byId(id).rare; if (pw0.filter(ok).length + vr0.filter(ok).length >= 3) { pw0 = pw0.filter(ok); vr0 = vr0.filter(ok); } }
   const pw = wsort(pw0), vr = vr0;
   const out = [];
-  if (pw.length) out.push(pw[0]);
+  if (st) out.push(st); else if (pw.length) out.push(pw[0]);
   const v2 = wsort(vr).reverse();
   while (out.length < 3 && v2.length) out.push(v2.pop());
-  const p2 = pw.filter(id => !out.includes(id)).sort(() => Math.random() - 0.5);
+  const p2 = pw.filter(id => !out.includes(id)).sort(() => Math.random() - 0.5);   // (при стартовой карточке сила-вторая берётся отсюда)
   while (out.length < 3 && p2.length) out.push(p2.pop());
   save.offers = out; save.offerShuffled = false;
   return out;
@@ -60,19 +68,21 @@ export function ensureOffers(save) { if (!Array.isArray(save.offers)) rollOffers
 export function buyOffer(save, id) {
   const price = offerPrice(save, id); if (save.candies < price) return false;
   save.candies -= price; save.meta[id] = (save.meta[id] || 0) + 1;
+  if (save.starter === id) save.starter = null;
   save.offers = save.offers.filter(o => o !== id);
   return true;
 }
-// «Утешительный приз»: после ПЕРВОЙ смерти на счёте хватает минимум на две покупки с витрины (и не меньше FIRST_DEATH_BONUS сверху);
-// после 2–3-й смерти — минимум на одну (если короткий забег не набрал). Конфеты зачисляются сразу; возвращает { n, label } или null.
-export const FIRST_DEATH_BONUS = 25;
-export function consolation(save) {
-  const deaths = save.stats?.deaths || 0, prices = (save.offers || []).map(id => offerPrice(save, id)).sort((a, b) => a - b);
-  if (!prices.length) return null;
-  let need = 0, min = 0, label = 'Утешительный приз';
-  if (!save.firstDeathGift && deaths <= 1) { save.firstDeathGift = true; need = prices[0] + (prices[1] || 0); min = FIRST_DEATH_BONUS; }
-  else if (deaths <= 3) { need = prices[0]; label = 'Подарок за смелость'; }
-  const n = Math.max(min, need - save.candies);
+// «Утешительный приз» (умеренный). ПЕРВАЯ смерть: на счёте минимум цена «Стартового набора» (STARTER.price) — хватает ровно на одну самую дешёвую покупку,
+// на две обычные карточки не хватит (они от ~45). 2–3-я смерть: небольшая добавка, привязанная к длине забега (≈ 6 конфет в минуту, не больше 18), без гарантий покупки.
+// Конфеты зачисляются сразу; возвращает { n, label } или null. run: { time } — секунды забега.
+export const FIRST_DEATH_BONUS = STARTER.price;
+export function consolation(save, run = {}) {
+  const deaths = save.stats?.deaths || 0, sec = run.time || 0;
+  let n = 0, label = 'Утешительный приз';
+  if (!save.firstDeathGift && deaths <= 1) {
+    save.firstDeathGift = true; label = 'Подарок первой смерти';
+    if (save.starter && isStarter(save, save.starter)) n = Math.max(0, STARTER.price - save.candies);
+  } else if (deaths <= 3 && sec >= 40) { n = Math.max(3, Math.min(18, Math.round(sec / 60 * 6))); label = 'Подарок за смелость'; }
   if (n <= 0) return null;
   save.candies += n; save.stats.candiesTotal = (save.stats.candiesTotal || 0) + n;
   return { n, label };
@@ -454,6 +464,8 @@ export function drawOfferCard(ctx, save, id, x, y, w, h, btn, i, o = {}) {
   let right = x + w - 12;
   if (power) { for (let k = m.max - 1; k >= 0; k--) { ctx.fillStyle = k < r ? C.gold : 'rgba(243,226,192,0.3)'; ctx.beginPath(); ctx.roundRect(right - 10, y + rh / 2, 10, 6, 2); ctx.fill(); right -= 14; } right -= 4; }
   if (rare) { ctx.fillStyle = C.gold; ctx.textAlign = 'right'; ctx.font = F(900, big ? 13 : 12); ctx.fillText('★ РЕДКОЕ', right, y + rh / 2 + 3); ctx.textAlign = 'left'; }
+  const starter = isStarter(save, id);
+  if (starter) { ctx.fillStyle = C.pink; ctx.textAlign = 'right'; ctx.font = F(900, big ? 13 : 12); ctx.fillText('СТАРТОВЫЙ НАБОР', right, y + rh / 2 + 3); ctx.textAlign = 'left'; }
   const bought = o.stamp != null;
   if (big) {
     drawMetaIcon(ctx, id, x + 50, y + rh + 44, 78, { t });
@@ -465,7 +477,7 @@ export function drawOfferCard(ctx, save, id, x, y, w, h, btn, i, o = {}) {
     const tx = x + 98, tw = w - 108;
     ctx.fillStyle = C.ink; fitFont(ctx, m.name, 900, 18, tw); ctx.fillText(m.name, tx, y + rh + 20);
     ctx.font = F(800, 13, 'italic '); ctx.fillStyle = rare ? '#9a4a00' : power ? '#a01828' : '#6b2fa3';
-    const pl = wrapLines(ctx, OFFER_PUNCH[id] || '', tw).slice(0, 2); pl.forEach((ln, k) => ctx.fillText(ln, tx, y + rh + 42 + k * 15));
+    const pl = wrapLines(ctx, starter ? 'Подарок первой смерти: почти даром!' : (OFFER_PUNCH[id] || ''), tw).slice(0, 2); pl.forEach((ln, k) => ctx.fillText(ln, tx, y + rh + 42 + k * 15));
     ctx.font = F(700, 12.5); ctx.fillStyle = '#5a3020';
     wrapLines(ctx, m.desc, w - 28).slice(0, 3).forEach((ln, k) => ctx.fillText(ln, x + 14, y + rh + 92 + k * 14));
     // линия отрыва и корешок цены
@@ -848,6 +860,7 @@ export function drawOfferWide(ctx, save, id, x, y, w, h, btn, i, o = {}) {
   let right = x + w - 14;
   if (power) { for (let k = m.max - 1; k >= 0; k--) { ctx.fillStyle = k < r ? C.gold : 'rgba(243,226,192,0.3)'; ctx.beginPath(); ctx.roundRect(right - 12, y + rh / 2 - 3, 12, 7, 2); ctx.fill(); right -= 17; } right -= 4; }
   if (rare) { ctx.fillStyle = C.gold; ctx.textAlign = 'right'; ctx.font = F(900, fs - 1); ctx.fillText('★ РЕДКОЕ', right, y + rh / 2 + 1); ctx.textAlign = 'left'; }
+  if (isStarter(save, id)) { ctx.fillStyle = C.pink; ctx.textAlign = 'right'; ctx.font = F(900, fs - 1); ctx.fillText('СТАРТОВЫЙ НАБОР', right, y + rh / 2 + 1); ctx.textAlign = 'left'; }
   // медальон
   const bh = h - rh, ib = clampN(bh - 18, 56, 88), icx = x + 14 + ib / 2, icy = y + rh + bh / 2;
   drawMetaIcon(ctx, id, icx, icy, ib, { t });

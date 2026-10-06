@@ -29,14 +29,17 @@ export function drawVecRaw(ctx, data, x, y, w, h, blur = 0, overlay = null) {
 
 // Нарисовать через кэш-битмап (для игры: фоны, персонажи сцен)
 // blur > 0 — мягкость живописного фона (как у оригинальных артов), 0 — чёткие персонажи
+const MAX_BITMAPS = 8;   // на один рисунок: переменный размер (анимация, масштаб, раздувание) не должен копить сотни холстов — самый старый вытесняется и освобождается
 export function drawVec(ctx, data, x, y, w, h, key, blur = 0, overlay = null) {
   const k = (key || '') + '|' + w + 'x' + h + '@' + DPR + '|' + blur;
-  let bm = bitmaps.get(data)?.get(k);
-  if (!bm) {
+  let m = bitmaps.get(data); if (!m) bitmaps.set(data, m = new Map());
+  let bm = m.get(k);
+  if (bm) { if (m.size > 1) { m.delete(k); m.set(k, bm); } }   // свежесть: недавно использованный — в конец
+  else {
     const c = document.createElement('canvas'); c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR);
     const cx = c.getContext('2d'); cx.scale(DPR, DPR); drawVecRaw(cx, data, 0, 0, w, h, blur * DPR, overlay);
-    if (!bitmaps.has(data)) bitmaps.set(data, new Map());
-    bitmaps.get(data).set(k, c); bm = c;
+    m.set(k, c); bm = c;
+    while (m.size > MAX_BITMAPS) { const old = m.keys().next().value, oc = m.get(old); m.delete(old); oc.width = oc.height = 0; }
   }
   ctx.drawImage(bm, x, y, w, h);
 }

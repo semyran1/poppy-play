@@ -319,7 +319,7 @@ export function updateOwnFoes(G, dt) {
       continue;
     }
     if (f.x < -40 || f.x > view.W + 40 || f.y < -200) { f.dead = true; continue; }
-    if (!p.dead && Math.abs(f.x - p.x) < 15 + f.r * 0.8 && f.y + f.r * 0.6 > p.y - 90 && f.y - f.r * 0.6 < p.y) { f.dead = true; G.hurtPlayer(f.why); }
+    if (!p.dead && Math.abs(f.x - p.x) < 15 + f.r * 0.8 && f.y + f.r * 0.6 > p.y - 90 && f.y - f.r * 0.6 < p.y) { f.dead = true; G.hurtPlayer(f.why, { soft: true }); }
   }
 }
 

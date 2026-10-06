@@ -26,10 +26,10 @@ export const ACHIEVEMENTS = [
   { id: 'chapter2', gems: 10, name: 'Прогулка', desc: 'Пройти главу «Улица»', check: (e) => e.type === 'chapterClear' && e.chapter === 1 },
   { id: 'chapter1', gems: 10, name: 'Сеанс окончен', desc: 'Пройти главу «Кинотеатр»', check: (e) => e.type === 'chapterClear' && e.chapter === 0 },
   { id: 'chapter3', gems: 10, name: 'Рассвет над замком', desc: 'Пройти главу «Готика»', check: (e) => e.type === 'chapterClear' && e.chapter === 2 },
-  { id: 'fast1', name: 'Спринтерша', desc: 'Пройти главу быстрее 5 минут', unlock: 'sneakersStart', check: (e) => e.type === 'chapterClear' && e.time < 300 },
+  { id: 'fast1', name: 'Спринтерша', desc: 'Пройти главу быстрее 5 минут', check: (e) => e.type === 'chapterClear' && e.time < 300 },
   { id: 'onegun', name: 'Минимализм', desc: 'Пройти главу только с одним оружием', unlock: 'acc_claw_clean', check: (e, r) => e.type === 'chapterClear' && r.weapons.length === 1 },
   { id: 'nohit', name: 'Неуловимая', desc: 'Пройти волну без потери сердца', unlock: 'acc_pet_surfdog', check: (e) => e.type === 'waveClear' && e.damageTaken === 0 },
-  { id: 'last30', name: 'Последняя капля', desc: 'Сбить последнюю каплю волны у самого пола', unlock: 'mirrorStart', check: (e) => e.type === 'waveClear' && e.lastY > 430 },
+  { id: 'last30', name: 'Последняя капля', desc: 'Сбить последнюю каплю волны у самого пола', check: (e) => e.type === 'waveClear' && e.lastY > 430 },
   { id: 'heal', name: 'Свежее бельё', desc: 'Подобрать трусики при одном сердце', check: (e) => e.type === 'panties' && e.hpBefore === 1 },
   { id: 'die1', gems: 5, name: 'Бывает', desc: 'Проиграть в первый раз. Это нормально!', unlock: 'acc_pet_guinea', check: (e) => e.type === 'death' },
   { id: 'runs5', name: 'Упрямая', desc: 'Начать 5 забегов', unlock: 'acc_charm_runcow', check: (e, r, s) => e.type === 'runStart' && s.stats.runs >= 5 },
@@ -45,7 +45,7 @@ export const ACHIEVEMENTS = [
   { id: 'hug', name: 'Обнимашки', desc: 'Обнять Руду в финале', unlock: 'acc_pet_monkey', check: (e, r) => e.type === 'bossKill' && e.boss === 'ruda' && r.ending === 'hug' },
   { id: 'war', name: 'Через 28 дней', desc: 'Добить Руду в финале', check: (e, r) => e.type === 'bossKill' && e.boss === 'ruda' && r.ending === 'war' },
   { id: 'finale', gems: 10, name: 'Посвящается всем девушкам', desc: 'Пройти финал «Логово Руды»', check: (e) => e.type === 'chapterClear' && e.chapter === 3 },
-  { id: 'secret', name: 'Кетчуп?', desc: '???  Простоять 20 секунд в углу кинотеатра', secret: true, check: (e) => e.type === 'corner' },
+  { id: 'secret', name: 'Кетчуп?', desc: '??? Простоять 20 секунд в углу кинотеатра', secret: true, check: (e) => e.type === 'corner' },
 ];
 
 // Награды, которые не оружие и не аксессуар: подпись в тосте и в списке достижений

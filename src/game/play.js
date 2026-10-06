@@ -1,12 +1,13 @@
 // Сцена боя: волны главы, режиссёр спавна, счётчик капель, урон, комбо, подбор, прокачка, босс, сундук.
-import { BASE_STATS, WEAPONS, PASSIVES, ENEMIES, CHAPTERS, META_SHOP, xpToNext, assistFor } from './data.js';
+import { BASE_STATS, WEAPONS, PASSIVES, ENEMIES, CHAPTERS, META_SHOP, xpToNext, assistFor, CARD_TUNE } from './data.js';
 import { createPlayer, updatePlayer, drawPlayer, playerBox, GROUND, ARENA, muzzle } from './player.js';
 import { view, onViewChange } from '../engine/core.js';
+import { sanitizeWorld } from './viewguard.js';
 import { withFrame, fillFull } from '../engine/frame.js';
 import { makeEnemy, updateEnemy, drawEnemy } from './enemies.js';
 import { updateWeapons, updateShots, drawShots, drawWeaponFx, weaponParams, muzzleColor } from './weapons.js';
 import { makeSpasm, updateBoss, drawBoss, drawBossBar } from './boss.js';
-import { BLOAT_SIZES, BLOAT_TOTAL, updateFoes, drawFoes } from './chapter2.js';
+import { BLOAT_SIZES, BLOAT_TOTAL, BLOAT_WAVES, BLOAT_MARKS, bloatFutureHp, bloatK, updateFoes, drawFoes } from './chapter2.js';
 import { makeQueen, updateOwnFoes, drawOwnFoes, drawGothicAmbient } from './chapter3.js';
 import { makeRuda, drawRudaChoice, drawRudaChoiceP, drawLairAmbient } from './finale.js';
 import { drawHUD, drawCards, banner, text, button, panel, drawTouchControls, wrap, HUDBOX, withHud } from './ui.js';
@@ -20,12 +21,14 @@ import { createBarks, DEATH_LINES, CLEAR_LINES } from './barks.js';
 import { newPet, petTarget, updatePet, petReact, petIdle, drawPet, drawPetBubble, PET_NOM } from './pets.js';
 import { loadAccVec, preloadAcc } from '../art/accessories.js';
 import { rollOffers, consolation, drawGiftLine, ensureOffers, buyOffer, shuffleOffers, drawOfferCard, offerPrice, hasMeta, SHUFFLE_PRICE, revealStart, revealTick, revealSkip, revealDone, revealBought, drawRevealOffers, drawRevealCandies } from './meta.js';
-import { drawLipstickGlow, initPowerups, puWaveStart, enemyTimeScale, updatePowerups, puOnKill, puPickup, drawPuToken, drawUmbrella, drawPuScreen, tickPuScreen, drawPuHud } from './powerups.js';
+import { PU, BOSS_BONUS, drawBonusFx, drawLipstickGlow, initPowerups, puWaveStart, enemyTimeScale, updatePowerups, puOnKill, puPickup, drawPuToken, drawUmbrella, drawPuScreen, tickPuScreen, drawPuHud } from './powerups.js';
 import { drawGrade, drawAmbient } from '../art/post.js';
 import { loadHeroineBack } from '../art/heroineVec.js';
 import { facingOf } from './achievements.js';
 import { drawCardsP, drawPauseP, drawClearP, drawChestHintP } from './overlays_p.js';
 import { drawDeathP as drawDeathPortrait } from './death_p.js';
+import { carryOpen, carryUpdate, carryApply, drawCarryP, drawCarryL, drawCarryNote } from './carry.js';   // «Что взять с собой?» между главами (docs/iter_carry.md)
+import { tutStart, tutUpdate, drawTutorial } from './tutorial.js';
 
 const BELL_SHOTS = new Set(['tampon', 'gatling', 'shot', undefined]);   // таблетки, пар, метла и прочее тыкву не трогают
 const HURT_NAMES = { droplet: 'капелька', drop: 'капля', diver: 'пикирующая капля', jelly: 'желе', popcorn: 'попкорн Мисс Спазм', crier: 'капля-плакса', spazm: 'Спазмик', bloat: 'Великое Вздутие', fart: 'облако', spout: 'фонтанчик', ghost: 'Призрак Перепадов', craving: 'Тяга к сладкому' };
@@ -44,6 +47,7 @@ export function createPlay(app) {
     const s = { ...BASE_STATS };
     for (const m of META_SHOP) { const r = Math.min(m.max, app.save.meta[m.id] || 0); if (r) m.apply(s, r); }
     for (const p of G.run.passives) for (let l = 1; l <= p.lv; l++) PASSIVES[p.id].apply(s, l);
+    app.god?.patchStats?.(s);   // режим бога (god.js): скорость бега, запас сердец; без режима — ничего не делает
     G.stats = s; if (G.p) G.p.stats = s;
     return s;
   }
@@ -52,12 +56,34 @@ export function createPlay(app) {
   function continueRun(chapter) {
     const R = G.run; R.chapter = chapter; R.chapterTime = 0; R.damageTaken = 0;
     G.enemies = []; G.shots = []; G.foes = []; G.pickups = []; G.fx = []; G.stains = [];
-    G.boss = null; G.chest = null; G.fog = 0; G.p.hp = Math.min(G.stats.maxHp, G.p.hp + 2); G.p.dead = false; G.p.x = view.W / 2; G.p.y = GROUND; G.p.vx = 0; G.p.vy = 0;
+    G.tut = null; G.boss = null; G.chest = null; G.fog = 0; G.p.hp = Math.min(G.stats.maxHp, G.p.hp + 2); G.p.dead = false; G.p.x = view.W / 2; G.p.y = GROUND; G.p.vx = 0; G.p.vy = 0;
     preloadChapter(chapter);
     initPowerups(G, app.save.meta); G.flash = 0; G.puTitle = null; G.runStartBark = 'runStart'; G.ceasefire = false;
     startWave(0);
   }
   scene_continue = continueRun;
+  // «Что взять с собой?» (carry.js): сразу после continueRun. Улучшений ≤ лимита — плашка «Берёшь всё»; app.autoCarry / scene.autoCarry (тесты, боты) — сразу предвыбор.
+  function carryStart() {
+    G.carry = null; G.carryNote = null;
+    const st = carryOpen(G.run);
+    if (st.skip) { if (st.items.length) G.carryNote = { text: 'Берёшь всё', t: 0 }; return; }
+    if (scene.autoCarry || app.autoCarry) { carryFinish(st); return; }
+    G.carry = st; G.phase = 'carry'; G.phaseT = 0; sfx('levelup', { vol: 0.5 });
+  }
+  function carryFinish(st) {
+    if (!st || st.done) return;   // идемпотентно: второй вызов (клавиша и касание в одном кадре) не начисляет конфеты повторно
+    st.done = true;
+    const R = G.run, r = carryApply(R, st);
+    computeStats(); G.p.hp = Math.min(G.p.hp, G.stats.maxHp);   // уровень, сердца и опыт не трогаем
+    if (r.gained > 0) {   // конфеты обмена — как собранные: в конфеты забега и сразу в банк (при смерти / победе второй раз не засчитаются)
+      R.candies += r.gained; G.banked = (G.banked || 0) + r.gained; app.save.candies += r.gained; app.persist();
+      sfx('coin', { pitch: 1.2 });   // сумму показывает плашка G.carryNote
+    }
+    G.carryNote = { text: 'Взято с собой', sub: r.gained > 0 ? `+${r.gained} конфет за остальное` : null, t: 0 };
+    G.carry = null; if (G.phase === 'carry') { G.phase = 'intro'; G.phaseT = 0; }
+    if (!app.save.carryHintDone) { app.save.carryHintDone = true; app.persist(); }
+    sfx('select', { pitch: 1.5 });
+  }
   function startRun(chapter = 0) {
     G.run = {
       chapter, wave: 0, level: 1, xp: 0, xpNext: xpToNext(1),
@@ -69,7 +95,8 @@ export function createPlay(app) {
       revivesUsed: 0, rerolls: 0, pendingLevels: 0, bellKills: 0, score: 0,
     };
     G.p = createPlayer({ ...BASE_STATS }); G.p.outfit = app.save.outfit || 'lara'; G.p.facing = facingOf(app.save);
-    if (G.p.facing === 'back') loadHeroineBack(G.p.outfit);   // поза «спиной» (гардероб); до загрузки — анфас G.p.hero = app.save.hero || 'new';
+    if (G.p.facing === 'back') loadHeroineBack(G.p.outfit);   // поза «спиной» (гардероб); до загрузки — анфас
+    G.p.hero = app.save.hero || 'new';   // (QA: оператор раньше был проглочен комментарием выше)
     G.acc = app.save.acc?.equip || {}; G.accTrail = [];   // аксессуары: скин бластера и след выстрела (weapons.js)
     G.petId = G.acc.pet || null; G.pet = G.petId ? newPet() : null; preloadAcc(G.acc);   // рисунки надетого (питомец, скин бластера, заколка, брелок) — заранее
     // питомец (pets.js): только косметика
@@ -79,7 +106,9 @@ export function createPlay(app) {
     G.t = 0; G.trauma = 0; G.fog = 0; G.boss = null; G.freezeAll = 0; G.bubble = null; G.muzzle = 0;
     G.budget = 0; G.nextType = null; G.cornerT = 0; G.padTimer = 14; G.slowmo = 0; G.ceasefire = false;
     preload(['corridor', 'dead', 'victory']);
+    G.tut = tutStart(app, chapter);   // микро-туториал: только самый первый забег (до увеличения stats.runs)
     app.save.stats.runs++; app.persist();
+    G.run.firstRun = chapter === 0 && app.save.stats.runs <= 1; G.run.sinceRare = 1; G.run.cardN = 0;   // самый первый забег игры: классные карточки чаще (CARD_TUNE.first)
     app.emit({ type: 'runStart' }, G.run);
     // старт с контрольной точки (глава 2+): быстрый набор билда — по 4 повышения за пройденную главу
     if (chapter > 0) { G.run.pendingLevels = chapter * (chapter >= 2 ? 5 : 4);   // готика и финал: билд ближе к сквозному забегу (ур. 20+)
@@ -104,6 +133,7 @@ export function createPlay(app) {
     G.introDone = false; G.budget = wv.soft ? 0 : 2; G.nextType = wv.intro;   // мягкий вход: первая капля не сразу, а секунды через две
     G.phase = 'intro'; G.phaseT = 0;
     G.waveLabel = `${chapter().name} · волна ${i + 1} из ${chapter().waves.length}`;
+    G.pendingRumor = rumorKey(G.run.chapter, i);   // слух (ненавязчивая подсказка, один раз на сейв)
     G.bannerText = [`Волна ${i + 1}`, wv.hint];
     puWaveStart(G);
     playMusic(chapter().bg === 'street' || chapter().bg === 'lair' ? 'fight2' : 'fight');
@@ -137,6 +167,8 @@ export function createPlay(app) {
     if (e.dead || e.hp <= 0 || e.immune) return;   // призрак в серой фазе, фонтанчик
     const S = G.stats;
     let crit = false;
+    if (app.god?.dmgMul > 1) dmg *= app.god.dmgMul;   // режим бога: множитель урона
+    if (G.pu.bmight > 0) dmg *= 1.4;   // микро-бонус между волнами босса
     if (!o.tick && Math.random() < S.crit) { dmg *= S.critMul; crit = true; }
     if (o.shatter && e.slowT > 0) { dmg *= 3; crit = true; }
     e.hp -= dmg; e.hitT = o.tick ? Math.max(e.hitT, 0.02) : 0.06;
@@ -150,6 +182,8 @@ export function createPlay(app) {
   G.damageBoss = (dmg, src, o = {}) => {
     const b = G.boss; if (!b || b.virtual || b.invuln > 0 || b.state === 'enter' || b.dead) return;
     if (b.eyeT > 0) dmg *= 2;
+    if (app.god?.dmgMul > 1) dmg *= app.god.dmgMul;   // режим бога
+    if (G.pu.bmight > 0) dmg *= 1.4;
     if (!o.tick && Math.random() < G.stats.crit) dmg *= G.stats.critMul;
     b.hp -= dmg; if (b.minHp && b.hp < b.minHp) b.hp = b.minHp;   // Руда: на 10 % — выбор, а не смерть
     b.hitT = 0.05; G.run.bossDmg = (G.run.bossDmg || 0) + dmg;
@@ -191,16 +225,15 @@ export function createPlay(app) {
     if (big) { G.shake(0.15); G.freeze(0.04); }
     // опыт и конфеты
     dropPickup('xp', e.x, e.y, Math.max(1, Math.round(e.xp * (1 + 0.1 * G.waveIndex))));
-    if (Math.random() < (e.xp >= 4 ? 0.24 : e.xp >= 2 ? 0.12 : 0.075) * S.greed) dropPickup('candy', e.x, e.y, 1);   // раньше 4,5 %: на первую смерть не хватало ни на одну покупку
+    if (Math.random() < (e.xp >= 4 ? 0.19 : e.xp >= 2 ? 0.095 : 0.06) * S.greed) dropPickup('candy', e.x, e.y, 1);   // умеренно: 6 / 9,5 / 19 % (итерация 18 подняла до 7,5 / 12 / 24 %, вышло много)
     if (Math.random() < 0.012 * S.luck) dropItem(e.x, e.y);
     // деление
     if (e.type === 'drop') for (const s of [-1, 1]) G.enemies.push(makeEnemy('droplet', e.x + s * 8, e.y, G.waveIndex, { vy: -60, vx: s * 40 }));
     if (e.type === 'bloat') {
       G.shake(0.5); G.freeze(0.06); sfx('popBig', { pitch: 0.6 + e.size * 0.2 });
       G.parts.burst(e.x, e.y, 24, { color: ['#ff3a2a', '#ff8a5a', '#ffd36b', '#fff'], speed: [120, 380], g: 500, life: [0.4, 0.9], shape: 'drop', size: [3, 7] });
-      if (e.size < BLOAT_SIZES.length - 1) for (const s of [-1, 1]) G.enemies.push(makeEnemy('bloat', e.x + s * 20, e.y, 0, { size: e.size + 1, vx: s * BLOAT_SIZES[e.size + 1].vx, vy: -380 }));
       if (G.boss) { G.boss.x = e.x; G.boss.y = e.y; }
-      if (!G.enemies.some(f => f.type === 'bloat' && !f.dead) && e.size === BLOAT_SIZES.length - 1) bossDie();
+      if (!G.enemies.some(f => f.type === 'bloat' && !f.dead)) bloatWaveDone(e);   // волна кончилась: перерыв и микро-бонус, либо победа
     }
     if (e.type === 'jelly' && e.size < 3) for (const s of [-1, 1]) G.enemies.push(makeEnemy('jelly', e.x, e.y, G.waveIndex, { size: e.size + 1, vx: s * 75, vy: -320 }));
     // колокольчик каждые 20 убийств
@@ -237,10 +270,12 @@ export function createPlay(app) {
     if (G.phase === 'wave' && R.counter > R.counterStart * (chapter().waves[R.wave].leak ?? 1.5)) { R.counter = R.counterStart; G.hurtPlayer('Протечка'); G.floaters.add(view.W / 2, view.H * 0.37, 'Протечка!', { size: 34, color: '#ff4a5a', life: 1.2 }); }
   };
 
-  G.hurtPlayer = (why) => {
+  G.hurtPlayer = (why, o = {}) => {
     const p = G.p; if (p.iframes > 0 || p.dead || G.phase === 'clear') return;
     const R = G.run;
+    if (app.god?.onHurt?.(G, why)) return;   // режим бога: бессмертие (попадание видно, сердца целы)
     if (R.shield) { R.shield = false; p.iframes = 1; sfx('heal', { pitch: 0.7 }); G.floaters.add(p.x, p.y - 120, 'Щит!', { color: '#bfe8ff' }); return; }
+    if (o.soft && Math.random() < G.stats.duvet) { p.iframes = 0.6; G.floaters.add(p.x, p.y - 120, 'Пуховик!', { color: '#c9b0ff', size: 16 }); sfx('thud', { pitch: 1.6, vol: 0.4 }); return; }   // слёзы, семечки, попкорн, падение помидора вязнут в пуху
     if (Math.random() < G.stats.armor) { p.iframes = 0.6; G.floaters.add(p.x, p.y - 120, 'Плед спас!', { color: '#ffd0dc', size: 16 }); sfx('heal', { pitch: 1.3 }); return; }
     p.hp--; p.iframes = G.A?.iframes ?? 0.8; p.hurtFlash = 0.15; R.damageTaken++; R.waveDamage++; R.bossHits = (R.bossHits || 0) + 1;
     R.combo = 0; R.comboMul = 1;
@@ -272,33 +307,65 @@ export function createPlay(app) {
   }
 
   // ---------- Прокачка ----------
+  // Тиры карточек (data.js: tier, CARD_TUNE): имбовые (rare: Тампон-бластер и его улучшения, Ибупрофенчик, Грелка, Шоколадка, Ватный запас)
+  // реже; «защита от серий» (rareGap, rarePity); улучшение уже взятого — реже нового; самый первый забег щедрее; перед последней волной главы
+  // защитных карточек больше, и хотя бы одна попадётся, если защиты ещё нет. Состояние в G.run: sinceRare, cardN.
   function buildCards() {
-    const R = G.run, pool = [];
+    const R = G.run, T = CARD_TUNE, pool = [];
+    if (G.phase === 'cards' && R.cardMemo) { R.cardN = R.cardMemo.n; R.sinceRare = R.cardMemo.s; }   // «Перебор»: счётчики как до этого предложения
+    R.cardMemo = { n: R.cardN || 0, s: R.sinceRare ?? 1 };
     const unlocked = id => !(WEAPONS[id]?.locked || PASSIVES[id]?.locked) || app.save.unlocked[id];
     const ownedW = id => R.weapons.find(w => w.id === id || WEAPONS[w.id].evolved && Object.keys(WEAPONS).find(k => WEAPONS[k].evo === w.id) === id);
+    const tierOf = def => def.tier || (def.rare ? 'rare' : 'common'), tw = def => T.tierW[tierOf(def)];
+    const ph = G.phase === 'cards' ? G.prevPhase : G.phase;
+    const near = R.wave >= chapter().waves.length - 1 && ph !== 'bossDead' && !(G.boss && G.boss.dead);   // впереди босс (последняя волна или сам бой)
+    const dW = def => def.def && near ? T.defNear : 1;
+    const cardN = R.cardN || 0, first = !!R.firstRun && cardN < T.first.boostLevels, guar = !!R.firstRun && cardN < T.first.guaranteed;
     for (const w of R.weapons) {
       const def = WEAPONS[w.id];
-      if (!def.evolved && w.lv < def.lv.length) pool.push({ kind: 'w', id: w.id, w: def.rare ? 0.8 : 1.3, rare: def.rare, name: def.name, icon: def.icon, tag: `ур. ${w.lv + 1}`, desc: def.lv[w.lv].text, pairHint: hasPassive(def.pair) ? 'есть пара для эволюции' : null });
+      if (!def.evolved && w.lv < def.lv.length) pool.push({ kind: 'w', id: w.id, w: T.upgradeW * T.upgradeDecay ** (w.lv - 1) * tw(def), tier: tierOf(def), rare: tierOf(def) === 'rare', name: def.name, icon: def.icon, tag: `${tierOf(def) === 'rare' ? '★ ' : ''}ур. ${w.lv + 1}`, desc: def.lv[w.lv].text, pairHint: hasPassive(def.pair) ? 'есть пара для эволюции' : null });
     }
     if (R.weapons.length < 4) for (const id in WEAPONS) {
       const def = WEAPONS[id]; if (def.evolved || ownedW(id) || !unlocked(id)) continue;
-      const hpFrac = G.p.hp / G.stats.maxHp, wNew = id === 'bottle' ? (hpFrac <= 0.5 ? 0.9 : 0.3) : def.rare ? 0.3 : 1;
-      pool.push({ kind: 'w', id, w: wNew, rare: def.rare, name: def.name, icon: def.icon, tag: def.rare ? '★ редкое оружие' : 'новое оружие', desc: def.desc, isNew: true, pairHint: hasPassive(def.pair) ? 'пара к пассивке' : null });
+      const hpFrac = G.p.hp / G.stats.maxHp, bonus = id === 'bottle' ? (hpFrac <= 0.5 ? 1.8 : 0.6) : 1;   // Грелка — когда тебе нужно лечиться и держаться
+      pool.push({ kind: 'w', id, w: bonus * tw(def), tier: tierOf(def), rare: tierOf(def) === 'rare', name: def.name, icon: def.icon, tag: tierOf(def) === 'rare' ? '★ редкое оружие' : 'новое оружие', desc: def.desc, isNew: true, newRare: tierOf(def) === 'rare', pairHint: hasPassive(def.pair) ? 'пара к пассивке' : null });
     }
-    for (const p of R.passives) { const def = PASSIVES[p.id]; if (p.lv < def.max) pool.push({ kind: 'p', id: p.id, w: 1, name: def.name, icon: def.icon, tag: `ур. ${p.lv + 1}`, desc: def.desc }); }
+    for (const p of R.passives) { const def = PASSIVES[p.id]; if (p.lv < def.max) pool.push({ kind: 'p', id: p.id, w: T.upgradeW * T.upgradeDecay ** (p.lv - 1) * tw(def) * dW(def) * 1.25, tier: tierOf(def), rare: tierOf(def) === 'rare', def: !!def.def, name: def.name, icon: def.icon, tag: `${tierOf(def) === 'rare' ? '★ ' : ''}ур. ${p.lv + 1}`, desc: def.desc }); }
     if (R.passives.length < 4) for (const id in PASSIVES) {
       if (R.passives.find(p => p.id === id) || !unlocked(id)) continue;
       const def = PASSIVES[id];
       const pairOf = R.weapons.find(w => WEAPONS[w.id].pair === id);
-      pool.push({ kind: 'p', id, w: (pairOf ? 1.4 : 0.9) * (def.rare ? 0.35 : 1), rare: def.rare, name: def.name, icon: def.icon, tag: def.rare ? '★ редкая пассивка' : 'новая пассивка', desc: def.desc, isNew: true, pairHint: pairOf ? 'пара к ' + WEAPONS[pairOf.id].name : null });
+      pool.push({ kind: 'p', id, w: (pairOf ? 1.4 : 0.9) * tw(def) * dW(def) * (id === 'boots' && R.chapter >= 1 && R.chapter <= 2 ? 1.5 : 1), tier: tierOf(def), rare: tierOf(def) === 'rare', def: !!def.def, name: def.name, icon: def.icon, tag: tierOf(def) === 'rare' ? '★ редкая пассивка' : 'новая пассивка', desc: def.desc, isNew: true, pairHint: pairOf ? 'пара к ' + WEAPONS[pairOf.id].name : null });
     }
     const n = Math.random() < 0.1 * G.stats.luck ? 4 : 3;
-    const list = [];
-    while (list.length < n && pool.length) { const c = weighted(pool); list.push(c); pool.splice(pool.indexOf(c), 1); }
+    const list = [], rares = pool.filter(c => c.rare), sinceRare = R.sinceRare ?? 1;
+    const allowRare = guar || sinceRare >= T.rareGap;
+    let cand = pool.filter(c => !c.rare || allowRare);
+    if (cand.length < n) cand = pool.slice();
+    if (first) cand = cand.map(c => c.rare ? { ...c, w: c.w * T.first.boost } : c);
+    const take = c => { list.push(c); const i = cand.indexOf(c); if (i >= 0) cand.splice(i, 1); };
+    if (guar && rares.length) {   // первый забег: в первых повышениях одна «классная» (новое имбовое оружие заметнее улучшения)
+      take(weighted(cand.filter(c => c.rare).map(c => ({ ...c, w: c.w * (c.newRare ? 3 : 1), src: c })))?.src || cand.find(c => c.rare));
+      cand = cand.filter(c => !c.rare);   // ровно одна
+    }
+    while (list.length < n && cand.length) take(weighted(cand));
+    // защита от серий: давно не было имбовой — гарантируем одну
+    if (!list.some(c => c.rare) && sinceRare >= T.rarePity && rares.length) { const r = weighted(rares); const i = list.map(c => !c.def).lastIndexOf(true); if (list.length) list[i >= 0 ? i : list.length - 1] = r; else list.push(r); }
+    // впереди босс, а защиты у игрока нет — в предложении будет хотя бы одна защитная
+    if (near && list.length && !R.passives.some(p => PASSIVES[p.id].def) && !list.some(c => c.def)) {
+      const defs = pool.filter(c => c.def && !list.includes(c));
+      if (defs.length) { const d = weighted(defs); let i = -1; list.forEach((c, k) => { if (!c.rare) i = k; }); list[i >= 0 ? i : list.length - 1] = d; }
+    }
+    R.cardN = cardN + 1; R.sinceRare = list.some(c => c.rare) ? 0 : sinceRare + 1;
     if (!list.length) list.push({ kind: 'heal', name: 'Шоколадка', icon: 'choco', tag: 'бонус', desc: '+1 сердце и 15 конфет' }, { kind: 'candy', name: 'Пакет конфет', icon: 'candy', tag: 'бонус', desc: '+30 конфет' });
     return list;
   }
   function hasPassive(id) { return G.run.passives.some(p => p.id === id); }
+  // Чашка какао: на повышении уровня греет (+1 сердце при малом запасе; ур. 3 — всегда)
+  function cocoaWarm() {
+    const L = G.stats.cocoa, p = G.p; if (!L || p.dead || p.hp >= G.stats.maxHp) return;
+    if (p.hp <= [0, 2, 3, 99][L]) { p.hp++; G.floaters.add(p.x, p.y - 130, 'Какао! +1 ♥', { color: '#ffb48a', size: 18 }); sfx('heal', { pitch: 1.1 }); }
+  }
   function applyCard(c) {
     const R = G.run;
     if (c.kind === 'w') {
@@ -332,11 +399,11 @@ export function createPlay(app) {
     const p = G.p; p.dead = true; G.phase = 'dead'; G.phaseT = 0;
     app.save.stats.deaths++; app.emit({ type: 'death' }, G.run);
     app.save.barkMem = { lastDeathBy: G.lastHurt, lastWasDeath: true }; G.deathLine = pick(DEATH_LINES);
-    rollOffers(app.save, { cheap: app.save.stats.deaths <= 2 });   // первые смерти: без дорогих редких карточек
+    rollOffers(app.save, { cheap: app.save.stats.deaths <= 2, starter: !app.save.firstDeathGift && app.save.stats.deaths <= 1 });   // первые смерти: без дорогих редких карточек; первая — со «Стартовым набором» (дешёвая карточка, meta.js)
     G.parts.burst(p.x, p.y - 60, 40, { color: ['#ff3a4a', '#ff9ab8', '#fff', '#ffd166'], speed: [100, 400], g: 500, life: [0.5, 1.2], shape: 'star', size: [3, 7] });
     sfx('boom'); G.freeze(0.2); G.shake(0.8);
     bankCandies(false);
-    G.run.gift = consolation(app.save); if (G.run.gift) app.persist();   // «Утешительный приз»: гарантирует покупки (meta.js)
+    G.run.gift = consolation(app.save, { time: G.run.time }); if (G.run.gift) app.persist();   // «Утешительный приз» (meta.js): первая смерть — хватит на «Стартовый набор», дальше — малая добавка по длине забега
     playMusic('defeat', { then: 'calm' });
   }
   function bankCandies(win) {
@@ -346,12 +413,73 @@ export function createPlay(app) {
     app.save.best.level = Math.max(app.save.best.level, G.run.level);
     app.persist();
   }
+  // ---------- Босс «Великое Вздутие»: три волны (chapter2.js: BLOAT_WAVES). Между волнами — перерыв ~2,8 с, семечки исчезают, выпадает ОДИН микро-бонус ----------
+  const BLOAT_BREAK = 2.8;
+  function spawnBloatWave(w, first = false) {
+    const B = G.bloat, K = bloatK(), W = view.W, sizes = BLOAT_WAVES[w].sizes, n = sizes.length;
+    sizes.forEach((sz, i) => {
+      const x = n === 1 ? W / 2 : W * (0.2 + 0.6 * i / (n - 1)), dir = i % 2 ? -1 : 1;
+      G.enemies.push(makeEnemy('bloat', x, ARENA.sky + (n === 1 ? 120 : 70), 0, { size: sz, vx: BLOAT_SIZES[sz].vx * K.vx * (n === 1 ? 1 : dir), vy: n === 1 ? 0 : -140 }));
+    });
+    B.w = w; B.state = 'fight'; B.t = 0;
+    G.boss.waveName = `Волна ${w + 1} из ${BLOAT_WAVES.length}: ${BLOAT_WAVES[w].name}`;
+    if (!first) { G.floaters.add(W / 2, view.H * 0.3, `Волна ${w + 1}: ${BLOAT_WAVES[w].name}`, { size: 30, color: '#ffd166', life: 1.8 }); sfx('boom', { pitch: 0.7, vol: 0.6 }); G.shake(0.3); }
+  }
+  function bloatWaveDone(e) {
+    const B = G.bloat; if (!B || B.w >= BLOAT_WAVES.length - 1) { bossDie(); return; }
+    B.state = 'break'; B.t = 0;
+    for (const f of G.foes) { f.dead = true; G.parts.burst(f.x, f.y, 4, { color: ['#ffe066', '#fff'], speed: [40, 120], life: [0.2, 0.4], size: [2, 3.5] }); }   // семечки исчезают
+    const hurt = G.p.hp < G.stats.maxHp;
+    B.bonus = weighted([{ k: 'bheart', w: hurt ? 1.5 : 0.3 }, { k: 'bshield', w: 1 }, { k: 'bregen', w: hurt ? 1.2 : 0.4 }, { k: 'bmight', w: 1 }, { k: 'bbubble', w: 1 }]).k;
+    G.pickups.push({ kind: 'pu', id: B.bonus, boss: true, x: clamp(e.x, 90, view.W - 90), y: clamp(e.y, ARENA.sky + 90, GROUND - 120), vx: 0, vy: -120, t: 0, life: 16 });
+    G.boss.waveName = `Волна ${B.w + 1} пройдена`;
+    G.shake(0.4); sfx('ach', { pitch: 1.1 });
+    G.say(pick(['Один помидор — минус! Передышка.', 'Фух. Ещё не всё — но уже вкусно.', 'Томатный сок — это тоже напиток.']), '#fff');
+  }
+  function updateBloatBreak(dt) {
+    const B = G.bloat; if (!B || B.state !== 'break' || !G.boss || G.boss.dead) return;
+    B.t += dt; if (B.t >= BLOAT_BREAK) spawnBloatWave(B.w + 1);
+  }
+
+  // ---------- Слухи (ненавязчивые подсказки; по разу на сейв) ----------
+  const RUMORS = {
+    c1: 'В очереди шепчутся: в соседнем зале всё катится по полу. Кто-то обмолвился про резиновые сапоги…',
+    c1b: 'Из Вздутия сыплются семечки. Зонтик бы не помешал.',
+    c2: 'Говорят, Королева топает так, что по полу идёт волна. Сапоги, мол, выручают.',
+    c2b: 'Королева плачет ливнем. Зонтик держится крепче, чем нервы.',
+    c3: 'Руда зовёт старых знакомых — по одному. Пригодится всё, что уже пригодилось.',
+  };
+  function rumorKey(ch, wave) {
+    const last = wave === CHAPTERS[ch].waves.length - 1;
+    if (wave === 0 && ch >= 1 && ch <= 3) return 'c' + ch;
+    if (last && (ch === 1 || ch === 2)) return 'c' + ch + 'b';
+    return null;
+  }
+  function showRumor() {
+    const k = G.pendingRumor; G.pendingRumor = null; if (!k) return;
+    const h = app.save.hints = app.save.hints || {}; if (h[k]) return;
+    h[k] = true; app.persist(); G.rumor = { text: RUMORS[k], t: 0, life: 6.5 };
+  }
+  function drawRumor(ctx) {
+    const r = G.rumor; if (!r || G.paused) return;
+    const a = r.t < 0.5 ? r.t / 0.5 : r.t > r.life - 0.7 ? Math.max(0, (r.life - r.t) / 0.7) : 1;
+    const w = Math.min(view.W - 36, 540), x = view.W / 2, y = view.portrait ? view.H * 0.3 : 168;
+    ctx.save(); ctx.globalAlpha = a; ctx.font = '800 16px Nunito, sans-serif';
+    const lines = wrap(ctx, r.text, w - 40, 16, 800), h = 40 + lines.length * 21;
+    ctx.translate(0, (1 - a) * 8);
+    ctx.fillStyle = 'rgba(24,8,30,0.84)'; ctx.beginPath(); ctx.roundRect(x - w / 2, y, w, h, 14); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,209,102,0.8)'; ctx.stroke();
+    text(ctx, 'Слух из очереди', x, y + 16, { size: 12, color: '#ff9ab8', weight: 900, outline: false });
+    lines.forEach((ln, i) => text(ctx, ln, x, y + 38 + i * 21, { size: 16, color: '#ffe6ef', weight: 800, outline: false }));
+    ctx.restore();
+  }
+
   function startBoss() {
-    G.phase = 'bossIntro'; G.phaseT = 0;
+    G.phase = 'bossIntro'; G.phaseT = 0; G.bloat = null;
     if (chapter().boss === 'bloat') {
       // «виртуальный» босс: сам томат — враги-куски в G.enemies, здесь только имя и общая полоса HP
-      G.boss = { id: 'bloat', name: 'Великое Вздутие', virtual: true, x: view.W / 2, y: ARENA.sky + 200, r: 0, hp: BLOAT_TOTAL, maxHp: BLOAT_TOTAL, state: 'fight', slams: [], dark: 0, eyeT: 0, invuln: 0, t: 0 };
-      G.enemies.push(makeEnemy('bloat', view.W / 2, ARENA.sky + 120, 0, { size: 0, vx: 85, vy: 0 }));
+      G.boss = { id: 'bloat', name: 'Великое Вздутие', intro: 'Три волны: большой, два средних, три мелких', virtual: true, x: view.W / 2, y: ARENA.sky + 200, r: 0, hp: BLOAT_TOTAL, maxHp: BLOAT_TOTAL, state: 'fight', slams: [], dark: 0, eyeT: 0, invuln: 0, t: 0, marks: BLOAT_MARKS };
+      G.bloat = { w: 0, state: 'fight', t: 0, bonus: null }; spawnBloatWave(0, true);
     } else G.boss = chapter().boss === 'queen' ? makeQueen() : chapter().boss === 'ruda' ? makeRuda() : makeSpasm();
     G.waveLabel = `${chapter().name} · босс`;
     G.run.bossHits = 0; G.run.bossDmg = 0;
@@ -446,8 +574,8 @@ export function createPlay(app) {
     for (const e of G.enemies) updateEnemy(G, e, edt);
     if (G.boss && !G.boss.dead && !G.boss.virtual) (G.boss.upd || updateBoss)(G, G.boss, G.bossFreeze > 0 ? 0 : (G.pu.slow > 0 ? dt * 0.6 : dt) * G.A.bossTempo);
     if (G.boss && G.boss.virtual && !G.boss.dead) { // общая полоса: живые куски + их будущие дети
-      const pot = s => s >= BLOAT_SIZES.length ? 0 : BLOAT_SIZES[s].hp + 2 * pot(s + 1);
-      G.boss.hp = G.enemies.filter(e => e.type === 'bloat' && !e.dead).reduce((a, e) => a + Math.max(0, e.hp) + 2 * pot(e.size + 1), 0);
+      G.boss.hp = G.enemies.filter(e => e.type === 'bloat' && !e.dead).reduce((a, e) => a + Math.max(0, e.hp), 0) + (G.bloat ? bloatFutureHp(G.bloat.w) : 0);
+      updateBloatBreak(dt);
     }
     { // снаряды глав 1–2 (chapter2.js) и крупные снаряды глав 3–4 (f.own, chapter3.js) — у каждых своя физика
       const own = G.foes.filter(f => f.own); if (own.length) G.foes = G.foes.filter(f => !f.own);
@@ -505,7 +633,7 @@ export function createPlay(app) {
     for (const p of G.pickups) if (p.kind === 'xp' || p.kind === 'candy') p.magnet = true;
     sfx('ach', { pitch: 1.2 }); G.shake(0.3);
     G.parts.burst(view.W / 2, view.H * 0.37, 40, { color: ['#ffd166', '#ff7aa8', '#5ee6c8', '#fff'], speed: [150, 450], g: 400, life: [0.6, 1.2], shape: 'rect', size: [3, 6] });
-    addCandies(10 + R.wave * 4 + (R.floorHits === 0 ? 10 : 0));   // за чистую волну (было 5 + 2·волна)
+    addCandies(9 + R.wave * 3 + (R.floorHits === 0 ? 8 : 0));   // за волну; чистая (ни капли на полу) — бонус
     G.bark('waveClear');
     if (G.pet) petReact(G.pet, G.petId, 'clear');
     if (hasMeta(app.save, 'v_rain')) for (let i = 0; i < 18; i++) setTimeout(() => { if (G.phase === 'clear') G.pickups.push({ kind: 'candy', x: rand(80, view.W - 80), y: -10, vx: rand(-20, 20), vy: rand(40, 120), v: 1, t: 0, life: 6, rot: 0 }); }, i * 110);
@@ -547,13 +675,14 @@ export function createPlay(app) {
     if (!p.dead) for (const e of G.enemies) {
       if (e.dead) continue;
       const cx = clamp(e.x, pb.x, pb.x + pb.w), cy = clamp(e.y, pb.y, pb.y + pb.h);
-      if ((e.x - cx) ** 2 + (e.y - cy) ** 2 < (e.r * 0.9 * G.A.hit) ** 2) {
+      if ((e.x - cx) ** 2 + (e.y - cy) ** 2 < (e.r * (e.type === 'bloat' ? 0.82 : 0.9) * G.A.hit) ** 2) {   // помидор: контур спрайта прощает больше
         if (e.type === 'spazm' && G.stats.boots) {
           if (p.vy > 60 && p.y < e.y) { p.vy = -420; G.kill(e, 'boots'); G.shake(0.2); sfx('thud', { pitch: 1.3 }); if (G.stats.boots >= 2) for (const f of G.enemies) if (!f.dead && f.type !== 'jelly' && f.type !== 'bloat' && Math.hypot(f.x - p.x, f.y - p.y) < 140) G.kill(f, 'boots'); }
           continue;
         }
         if (p.iframes > 0) continue;
-        G.hurtPlayer(e.type);
+        G.hurtPlayer(e.type, { soft: e.type === 'popcorn' || e.type === 'bloat' });
+        if (e.type === 'bloat') G.p.iframes = Math.max(G.p.iframes, (G.A?.iframes ?? 0.8) + 0.5);   // после удара помидора передышка длиннее: не добивает цепочкой
         if (e.type === 'jelly' || e.type === 'bloat') { e.vx = Math.sign(e.x - p.x || 1) * Math.abs(e.vx || 75) * 1.4; e.vy = -Math.abs(e.vy) - 250; }
         else if (e.type !== 'fart' && !e.noPop && !e.immune && !e.boss && ['droplet', 'drop', 'diver', 'popcorn', 'crier', 'spazm'].includes(e.type)) G.pop(e, false);
       }
@@ -567,7 +696,8 @@ export function createPlay(app) {
       if (k.kind === 'bell') {
         k.vy += 230 * dt; k.y += k.vy * dt; k.x += Math.sin(k.t * 2) * 30 * dt;
         if (k.y > GROUND - 14) { k.dead = true; G.parts.burst(k.x, k.y, 6, { color: '#ffd166' }); continue; }
-      } else if (k.kind === 'pu') { k.vy += 600 * dt; k.x += k.vx * dt; k.y += k.vy * dt; if (k.y > GROUND - 18) { k.y = GROUND - 18; k.vy = 0; k.vx = 0; } }
+      } else if (k.kind === 'pu' && k.boss && k.t > 1.1) { const d = Math.hypot(p.x - k.x, (p.y - 50) - k.y) || 1, sp = 380 + k.t * 50; k.x += (p.x - k.x) / d * sp * dt; k.y += ((p.y - 50) - k.y) / d * sp * dt; }   // микро-бонус босса сам подлетает
+      else if (k.kind === 'pu') { k.vy += 600 * dt; k.x += k.vx * dt; k.y += k.vy * dt; if (k.y > GROUND - 18) { k.y = GROUND - 18; k.vy = 0; k.vx = 0; } }
       else if (k.item) { k.y += k.vy * dt; k.x += Math.sin(k.t * 2.5) * 25 * dt; k.rot = Math.sin(k.t * 3) * 0.3; if (k.y > GROUND - 10) { k.y = GROUND - 10; k.vy = 0; } }
       else {
         const d = Math.hypot(p.x - k.x, (p.y - 50) - k.y);
@@ -658,7 +788,7 @@ export function createPlay(app) {
     drawPickups(ctx);
     drawShots(G, ctx);
     { const own = G.foes.filter(f => f.own); if (own.length) { const all = G.foes; G.foes = all.filter(f => !f.own); drawFoes(G, ctx); G.foes = all; } else drawFoes(G, ctx); drawOwnFoes(G, ctx); }
-    drawLipstickGlow(ctx, G);
+    drawLipstickGlow(ctx, G); drawBonusFx(ctx, G);
     if (G.pet && !p.dead) drawPet(ctx, G.pet, G.petId, PET_NOM, { noBubble: true });   // питомец — за героиней
     drawPlayer(ctx, p, G.t);
     if (G.pet && !p.dead && G.pet.bubble && !(G.bubble && G.bubble.t < G.bubble.life)) drawPetBubble(ctx, G.pet, PET_NOM, view.W - 6);
@@ -739,7 +869,7 @@ export function createPlay(app) {
 
   // ---------- Сцена ----------
   const scene = {
-    enter(game, opts = {}) { G.game = game; if (opts.continue) scene_continue(opts.chapter); else startRun(opts.chapter || 0); },
+    enter(game, opts = {}) { G.game = game; game.timeScale = 1; G.slowmo = 0; G.paused = false; if (opts.continue) { scene_continue(opts.chapter); carryStart(); } else startRun(opts.chapter || 0); },
     hasNext: () => G.run.chapter + 1 < CHAPTERS.length, run: () => G.run,
     G,
     update(dt, rdt) {
@@ -751,11 +881,12 @@ export function createPlay(app) {
       inp.poll();
       G.trauma = Math.max(0, G.trauma - 1.5 * rdt);
       if (G.slowmo > 0) { G.slowmo -= rdt; if (G.slowmo <= 0) app.game.timeScale = 1; }
-      G.phaseT += rdt; tickPuScreen(G, rdt);
-      if (inp.pausePressed && !['cards', 'dead', 'chapterClear', 'choice'].includes(G.phase)) { G.paused = !G.paused; sfx('select'); }
+      G.phaseT += rdt; tickPuScreen(G, rdt); if (G.rumor && !G.paused && (G.rumor.t += rdt) > G.rumor.life) G.rumor = null;
+      if (G.carryNote && (G.carryNote.t += rdt) > 2.6) G.carryNote = null;
+      if (inp.pausePressed && !['cards', 'dead', 'chapterClear', 'choice', 'carry'].includes(G.phase)) { G.paused = !G.paused; sfx('select'); }
       if (G.paused) { inp.endStep(); return; }
       switch (G.phase) {
-        case 'intro': updateWorld(dt); if (G.phaseT > 1.8) { G.phase = 'wave'; G.phaseT = 0; if (G.runStartBark) { G.bark(G.runStartBark, { force: true }); G.runStartBark = null; } else G.say(chapter().waves[G.run.wave].hint.split('!')[0] + '!', '#fff'); } break;
+        case 'intro': updateWorld(dt); if (G.phaseT > 1.8) { G.phase = 'wave'; G.phaseT = 0; showRumor(); if (G.runStartBark) { G.bark(G.runStartBark, { force: true }); G.runStartBark = null; } else G.say(chapter().waves[G.run.wave].hint.split('!')[0] + '!', '#fff'); } break;
         case 'wave': updateWorld(dt); break;
         case 'boss':
           updateWorld(dt);
@@ -785,12 +916,14 @@ export function createPlay(app) {
           if (G.boss?.noChest && G.phaseT > 3.2) { G.boss = null; chapterClear(); }   // финал: сразу итоги
           break;
         case 'cards': updateCards(rdt); break;
+        case 'carry': if (!G.carry) { G.phase = 'intro'; G.phaseT = 0; } else if (carryUpdate(G.carry, inp, rdt) === 'confirm') carryFinish(G.carry); break;
         case 'dead': case 'chapterClear': G.parts.update(rdt, GROUND); G.floaters.update(rdt); break;
       }
       // повышение уровня открывает карты в бою
       if (G.run.pendingLevels > 0 && ['wave', 'boss', 'clear', 'intro'].includes(G.phase) && !G.p.dead && !G.ceasefire) {
-        G.bark('levelup'); G.run.pendingLevels--; openCards({ list: buildCards() });
+        G.bark('levelup'); G.run.pendingLevels--; cocoaWarm(); openCards({ list: buildCards() });
       }
+      tutUpdate(app, G, inp, dt);
       inp.endStep();
     },
     updateFrozen(rdt) { G.trauma = Math.max(0, G.trauma - 1.5 * rdt); },
@@ -798,24 +931,22 @@ export function createPlay(app) {
       const game = app.game, inp = app.inp;
       drawWorld(ctx);
       // HUD и бой — на полном виде (якорь по реальным краям экрана); оверлеи ниже — в дизайн-рамке 960×540 (engine/frame.js)
-      if (G.phase !== 'chapterClear' && G.phase !== 'choice') { drawHUD(ctx, G); withHud(ctx, 'tl', () => drawPuHud(ctx, G, HUDBOX.puX, HUDBOX.puY)); }
+      if (G.phase !== 'chapterClear' && G.phase !== 'choice' && !app.god?.hideHud) { drawHUD(ctx, G); withHud(ctx, 'tl', () => drawPuHud(ctx, G, HUDBOX.puX, HUDBOX.puY)); }
+      app.god?.drawBattle?.(ctx, G);   // режим бога: хитбоксы
       if (G.boss && !G.boss.dead && G.phase !== 'bossIntro') drawBossBar(ctx, G.boss);
       if (G.phase === 'intro') banner(ctx, G.bannerText[0], G.bannerText[1], G.phaseT / 1.8);
-      if (G.phase === 'clear') banner(ctx, 'ЧИСТО!', G.run.floorHits === 0 ? 'Ни одной капли на полу! +10 конфет' : null, Math.min(G.phaseT / 2.6, 1), '#5ee6c8');
+      if (G.phase === 'clear') banner(ctx, 'ЧИСТО!', G.run.floorHits === 0 ? 'Ни одной капли на полу! +8 конфет' : null, Math.min(G.phaseT / 2.6, 1), '#5ee6c8');
       if (G.phase === 'bossIntro') banner(ctx, G.boss.name, G.boss.intro || 'Ей не понравился фильм…', G.phaseT / 2.4, '#ff9ad0');
+      if (G.phase === 'boss' && G.bloat?.state === 'break' && G.bloat.bonus && BLOAT_WAVES[G.bloat.w + 1]) banner(ctx, `Волна ${G.bloat.w + 1} позади!`, `Бонус: ${PU[G.bloat.bonus].name}`, Math.min(1, G.bloat.t / BLOAT_BREAK), '#ffd166');
+      drawRumor(ctx);
       if (G.phase === 'choice') { if (ovPortrait()) { const r = drawRudaChoiceP(ctx, G, inp); if (r >= 0) G.choose2(r); } else withFrame(game, ctx, c => { const r = drawRudaChoice(c, G, inp); if (r >= 0) G.choose2(r); }); }
       if (G.phase === 'bossDead' && G.chest?.landed) { if (ovPortrait()) drawChestHintP(ctx, G, G.t); else text(ctx, 'Подойди к сундуку!', view.W / 2, view.H * 0.555, { size: 24, color: '#ffd166' }); }
       drawTouchControls(ctx, inp);
-      // подсказка по управлению: первые секунды первого забега главы
-      if (G.run.wave === 0 && G.run.time < 9 && ['intro', 'wave'].includes(G.phase)) {
-        const a = Math.min(1, (9 - G.run.time) / 1.5);
-        if (!inp.isTouch) { ctx.globalAlpha = a; text(ctx, '← → или A D — бег   ·   Пробел — прыжок   ·   Esc — пауза', view.W / 2, view.H - 20, { size: 14, color: '#f3e2c0', lw: 3 }); ctx.globalAlpha = 1; }
-        else if (!app.save.touchHintDone) {   // тач: один раз за всё время игры, пока идут первые секунды первого забега
-          ctx.globalAlpha = a; const hy = view.ground - (view.portrait ? 230 : 170);
-          text(ctx, 'Веди пальцем влево и вправо', view.W / 2, hy, { size: 22, color: '#f3e2c0', lw: 4 });
-          text(ctx, 'Прыжок — касание справа', view.W / 2, hy + 30, { size: 22, color: '#f3e2c0', lw: 4 }); ctx.globalAlpha = 1;
-          if (G.run.time > 6.5) { app.save.touchHintDone = true; app.persist(); }
-        }
+      // подсказки по управлению: первый забег — микро-туториал (tutorial.js, тач и десктоп); дальше на десктопе — строка внизу в первые секунды главы.
+      // Тач-подсказка про кнопку прыжка справа убрана: прыжок теперь тапом в любом месте / пальцем вверх.
+      drawTutorial(ctx, app, G);
+      if (!G.tut && !inp.isTouch && G.run.wave === 0 && G.run.time < 9 && ['intro', 'wave'].includes(G.phase)) {
+        ctx.globalAlpha = Math.min(1, (9 - G.run.time) / 1.5); text(ctx, '← → или A D — бег   ·   Пробел — прыжок   ·   Esc — пауза', view.W / 2, view.H - 20, { size: 14, color: '#f3e2c0', lw: 3 }); ctx.globalAlpha = 1;
       }
       // Оверлеи: ландшафт — дизайн-рамка 960×540 по центру вида (эмбиент по краям); портрет (ovPortrait) — своя раскладка на полном виде 540×H
       if (G.phase === 'cards') {
@@ -827,6 +958,12 @@ export function createPlay(app) {
           if (G.cards && G.run.rerolls > 0 && !G.cards.title && G.cardAppear > 0.35 && button(c, inp, 400, 462, 160, 44, `Перебор (${G.run.rerolls})`, { size: 17, color: '#8b5cf6' })) reroll();
         });
       }
+      if (G.phase === 'carry' && G.carry) {   // «Что взять с собой?»: портрет — на полном виде, ландшафт — в дизайн-рамке
+        const env = { inp, save: app.save };
+        if (ovPortrait()) { if (drawCarryP(ctx, G.carry, env) === 'confirm') carryFinish(G.carry); }
+        else withFrame(game, ctx, c => { fillFull(c, 'rgba(15,4,14,0.86)'); if (drawCarryL(c, G.carry, env) === 'confirm') carryFinish(G.carry); });
+      }
+      if (G.carryNote && G.phase !== 'carry') drawCarryNote(ctx, G.carryNote);
       if (G.phase === 'dead') { if (ovPortrait()) drawDeathP(ctx); else withFrame(game, ctx, drawDeath, { ambient: true }); }
       if (G.phase === 'chapterClear') { if (ovPortrait()) drawChapterClear(ctx, true); else withFrame(game, ctx, drawChapterClear, { ambient: true }); }
       if (G.paused) { if (ovPortrait()) drawPause(ctx, true); else withFrame(game, ctx, drawPause); }
@@ -838,13 +975,14 @@ export function createPlay(app) {
   // false — вернуть старую заглушку (дизайн-рамка 960×540 с эмбиентом). Ландшафт всегда в дизайн-рамке.
   scene.overlayPortraitLayout = true;
   const ovPortrait = () => view.portrait && scene.overlayPortraitLayout;
-  const OVERLAY = new Set(['cards', 'dead', 'chapterClear', 'choice']);
+  const OVERLAY = new Set(['cards', 'dead', 'chapterClear', 'choice', 'carry']);
   const LIVE = new Set(['intro', 'wave', 'clear', 'boss', 'bossIntro', 'bossDead']);
 
   // Смена размера окна / поворот телефона во время боя: позиции переносятся с сохранением относительного места
   // (по x — пропорционально ширине арены, у пола — на то же расстояние от пола, выше — растяжением), без «телепортов».
   onViewChange((v, prev) => {
     if (!G.run || !G.p) return;
+    if (![v.W, prev.W, prev.ground, v.ground].every(n => Number.isFinite(n) && n > 0)) { sanitizeWorld(G, app.game, 'смена вида (невалидные размеры)'); return; }
     const fx = v.W / prev.W, g0 = prev.ground, g1 = v.ground, k0 = g0 - 250, ky = k0 > 0 ? (g1 - 250) / k0 : 1;
     const mx = x => x * fx, my = y => y >= k0 ? y + (g1 - g0) : y * ky;
     const mv = o => { if (!o) return; for (const k of ['x', 'baseX', 'hugX', 'tx']) if (typeof o[k] === 'number') o[k] = mx(o[k]); for (const k of ['y', 'hoverY']) if (typeof o[k] === 'number') o[k] = my(o[k]); };
@@ -856,6 +994,8 @@ export function createPlay(app) {
     G.p.x = clamp(G.p.x, ARENA.left + G.p.w / 2, ARENA.right - G.p.w / 2);
     if (G.p.y > GROUND) G.p.y = GROUND;
     if (G.pet) G.pet.placed = false;
+    if (G.rv && !!G.rv.p !== !!(v.portrait && scene.overlayPortraitLayout)) G.rv = null;   // раскрытие награды на экране смерти рассчитано под другую раскладку — начнётся заново (в конце состояния)
+    sanitizeWorld(G, app.game, 'после смены вида');   // самолечение: NaN / улетевшие за вид / провалившиеся под пол (viewguard.js)
   });
 
   function updateCards(rdt) {
@@ -916,8 +1056,9 @@ export function createPlay(app) {
     if (G.lastHurt) text(ctx, `Подвело: ${G.lastHurt === 'Протечка' ? 'протечка (счётчик капель вырос)' : (HURT_NAMES[G.lastHurt] || G.lastHurt)}`, 725, 177, { size: 13, color: '#ffb0c0', outline: false, weight: 700 });
     drawOffers(ctx, 204);
     const fin = revealDone(rv);
-    if (button(ctx, app.inp, 300, 448, 170, 52, 'Ещё раз', { color: '#ff5d8f' }) || (fin && app.inp.uiHit('Enter'))) { startRun(G.run.chapter); return; }
-    if (button(ctx, app.inp, 490, 448, 170, 52, 'В меню', { color: '#8b5cf6' })) { app.goMenu(); return; }
+    const binp = T < 0.6 ? NO_INP : app.inp;   // первые 0,6 с кнопки не нажимаются (игрок ещё лихорадочно тапает по полю боя — как в портретном экране смерти, death_p.js)
+    if (button(ctx, binp, 300, 448, 170, 52, 'Ещё раз', { color: '#ff5d8f' }) || (fin && app.inp.uiHit('Enter'))) { startRun(G.run.chapter); return; }
+    if (button(ctx, binp, 490, 448, 170, 52, 'В меню', { color: '#8b5cf6' })) { app.goMenu(); return; }
     // клик мимо кнопок или Enter / Пробел — сразу к концу раскрытия
     if (!fin && T > 0.45 && (app.inp.pointer.clicked || app.inp.uiHit('Enter') || app.inp.uiHit('Space'))) { app.inp.pointer.clicked = false; revealSkip(rv); }
   }
@@ -973,7 +1114,10 @@ export function createPlay(app) {
   }
 
   // Пауза по клику на HUD-кнопку не делаем: Esc/P и потеря фокуса
-  document.addEventListener('visibilitychange', () => { if (document.hidden && app.cur?.() === scene && ['wave', 'boss', 'intro'].includes(G.phase)) G.paused = true; });
+  // автопауза: вкладка/приложение свёрнуты (visibilitychange) или окно потеряло фокус (blur: переключились в другое окно, нажали на рекламный iframe) — бой не идёт без игрока
+  const autoPause = () => { if (app.cur?.() === scene && ['wave', 'boss', 'intro'].includes(G.phase)) G.paused = true; };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
+  addEventListener('blur', autoPause);
 
   // Хуки для автотестов (develop-web-game)
   scene.toText = () => ({
@@ -984,9 +1128,10 @@ export function createPlay(app) {
     weapons: G.run.weapons.map(w => w.id + ':' + w.lv), passives: G.run.passives.map(p => p.id + ':' + p.lv),
     enemies: G.enemies.slice(0, 30).map(e => ({ t: e.type, x: Math.round(e.x), y: Math.round(e.y), hp: Math.round(e.hp) })),
     boss: G.boss ? { hp: Math.round(G.boss.hp), phase: G.boss.phase, state: G.boss.state } : null,
-    ending: G.run.ending || null, cards: G.cards ? G.cards.list.map(c => c.name) : null, hurtBy: G.run.hurtBy || {}, kills: G.run.kills, time: Math.round(G.run.time), shots: G.shots.length, pickups: G.pickups.length,
+    ending: G.run.ending || null, cards: G.cards ? G.cards.list.map(c => c.name) : null, carry: G.carry ? { limit: G.carry.limit, items: G.carry.items.map(i => i.id + ':' + i.lv + ':' + (i.keep ? 1 : 0)) } : null, hurtBy: G.run.hurtBy || {}, kills: G.run.kills, time: Math.round(G.run.time), shots: G.shots.length, pickups: G.pickups.length,
   });
   scene.choose = choose;
-  scene.hooks = { openCards, buildCards, die, openChest, chapterClear, startRun };   // для автотестов (tools/portover.mjs)
+  scene.hooks = { openCards, buildCards, die, openChest, chapterClear, startRun, carryStart, carryFinish };   // для автотестов (tools/portover.mjs)
+  scene.godHooks = { computeStats, startWave, startBoss, waveClear, continueRun, openCards, buildCards, die, openChest, chapterClear, startRun, carryStart };   // режим бога (god.js)
   return scene;
 }

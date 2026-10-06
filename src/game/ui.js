@@ -25,8 +25,10 @@ export function wrap(ctx, s, maxW, size, weight = 700) {
 export const BTNLOG = { on: false, list: [] };   // автотесты (tools/portover.mjs) включают и читают через window.__btns
 // Кнопка: возвращает true, если нажата в этом шаге. hover по мыши.
 export function button(ctx, inp, x, y, w, h, label, o = {}) {
-  if (BTNLOG.on) { const m = ctx.getTransform(), d = view.dpr || 1; BTNLOG.list.push({ label, x: (m.a * x + m.e) / d, y: (m.d * y + m.f) / d, w: m.a * w / d, h: m.d * h / d, disabled: !!o.disabled }); }   // для автотестов: прямоугольники кнопок в CSS-пикселях
-  const p = inp.pointer, over = p.x > x && p.x < x + w && p.y > y && p.y < y + h;
+  // «запас касания»: кнопка меньше 44 CSS px (сжатый ландшафт 532×360 / 696×304, где рамка 960×540 уменьшена) нажимается и за видимым краем, не больше 6 CSS px с каждой стороны
+  const tm = ctx.getTransform(), kc = Math.max(0.01, tm.a / (view.dpr || 1)), sx = Math.min(6 / kc, Math.max(0, (44 / kc - w) / 2)), sy = Math.min(6 / kc, Math.max(0, (44 / kc - h) / 2));
+  if (BTNLOG.on) { const m = tm, d = view.dpr || 1; BTNLOG.list.push({ label, x: (m.a * x + m.e) / d, y: (m.d * y + m.f) / d, w: m.a * w / d, h: m.d * h / d, hw: m.a * (w + 2 * sx) / d, hh: m.d * (h + 2 * sy) / d, disabled: !!o.disabled }); }   // для автотестов: прямоугольник кнопки (CSS px) и с запасом касания (hw/hh)
+  const p = inp.pointer, over = p.x > x - sx && p.x < x + w + sx && p.y > y - sy && p.y < y + h + sy;
   const press = over && p.down;
   const col = o.color ?? '#ff5d8f';
   ctx.save();
@@ -222,7 +224,8 @@ export function banner(ctx, s, sub, k, color = '#ffeb7a') {
   ctx.restore();
 }
 
-// Тач-управление в бою: кнопка прыжка справа внизу и плавающий джойстик (кольцо + ручка) там, где лежит левый палец.
+// Тач-управление в бою: кнопка паузы и плавающий джойстик (кольцо + ручка) там, где лежит левый палец; над кольцом — шеврон «вверх = прыжок».
+// Большая кнопка прыжка выключена (inp.showJumpButton = false): прыгают тапом в любом месте или пальцем вверх.
 // Рисуется поверх мира (полный вид); только когда isTouch и идёт бой (inp.gameplay).
 export function drawTouchControls(ctx, inp) {
   if (!inp.isTouch || !inp.gameplay) return;
@@ -233,17 +236,23 @@ export function drawTouchControls(ctx, inp) {
   ctx.globalAlpha = 0.55; ctx.fillStyle = 'rgba(14,6,18,0.7)'; ctx.beginPath(); ctx.arc(pz.x, pz.y, pz.r, 0, TAU); ctx.fill();
   ctx.lineWidth = 2.5; ctx.strokeStyle = '#f3e2c0'; ctx.stroke(); ctx.fillStyle = '#f3e2c0';
   ctx.fillRect(pz.x - pz.r * 0.34, pz.y - pz.r * 0.38, pz.r * 0.24, pz.r * 0.76); ctx.fillRect(pz.x + pz.r * 0.1, pz.y - pz.r * 0.38, pz.r * 0.24, pz.r * 0.76);
-  ctx.globalAlpha = jp ? 0.72 : 0.42;
-  ctx.fillStyle = '#ff7aa8'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
-  ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
-  const k = b.r / 58;
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(b.x, b.y - 18 * k); ctx.lineTo(b.x + 16 * k, b.y + 8 * k); ctx.lineTo(b.x - 16 * k, b.y + 8 * k); ctx.closePath(); ctx.fill();
+  if (inp.showJumpButton) {
+    ctx.globalAlpha = jp ? 0.72 : 0.42;
+    ctx.fillStyle = '#ff7aa8'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+    const k = b.r / 58;
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(b.x, b.y - 18 * k); ctx.lineTo(b.x + 16 * k, b.y + 8 * k); ctx.lineTo(b.x - 16 * k, b.y + 8 * k); ctx.closePath(); ctx.fill();
+  }
   const s = inp.stick;
   if (s.active) {
     const R = STICK.full + 15, dx = clamp(s.x - s.cx, -R, R), dy = clamp(s.y - s.cy, -28, 28);
     ctx.globalAlpha = 0.3; ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(s.cx, s.cy, R, 0, TAU); ctx.fill();
     ctx.globalAlpha = 0.6; ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(s.cx, s.cy, R, 0, TAU); ctx.stroke();
     ctx.globalAlpha = 0.85; ctx.fillStyle = '#ff7aa8'; ctx.beginPath(); ctx.arc(s.cx + dx, s.cy + dy, 28, 0, TAU); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.stroke();
+    // шеврон «вверх = прыжок» на уровне порога (STICK.jumpUp); при прыжке вспыхивает
+    const cy = s.cy - STICK.jumpUp, on = jp && s.cy - s.y >= STICK.jumpUp;
+    ctx.globalAlpha = on ? 0.95 : 0.4; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = on ? '#ffeb7a' : '#fff';
+    ctx.beginPath(); ctx.moveTo(s.cx - 14, cy + 6); ctx.lineTo(s.cx, cy - 6); ctx.lineTo(s.cx + 14, cy + 6); ctx.stroke();
   }
   ctx.restore();
 }
